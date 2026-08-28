@@ -22,7 +22,7 @@ uvicorn main:app --reload
 - API docs: <http://localhost:8000/docs>
 
 **It runs with no API key.** Without `BESTTIME_API_KEY_PRIVATE` the app
-serves realistic simulated data over ten demo venues, so you can develop
+serves realistic simulated data over 60+ demo venues across 20 cities, so you can develop
 and demo the whole thing offline. The header badge always shows which
 source is live.
 
@@ -49,11 +49,34 @@ BestTime bills per request, so every outbound call is cached
 lower them for fresher data. `GET /health` reports cache hit rates and
 your remaining credits.
 
+## Searching
+
+One box handles everything. `GET /v1/search?q=…` works out what you meant:
+
+| You type | It does |
+|---|---|
+| `The Copper Kettle` | Finds that venue by name and shows its busyness |
+| `coper kettel` | Fuzzy-matches to the same venue — typos are fine |
+| `Manchester` | Lists what's busy across that city |
+| `coffee in Leeds` | Category search in a place |
+| `sushi near Bristol` | Same, with `near`/`around`/`at` as separators |
+| `51.5074, -0.1278` | Raw coordinates still work |
+
+The response's `interpretation` object reports how the query was read
+(`term`, `place`, and `mode` — `venue` or `area`), so the UI can explain
+itself and you can debug a surprising result.
+
+Place names resolve through a built-in table of ~60 major cities (instant,
+offline), falling back to OpenStreetMap's Nominatim for anything else. No
+API key needed for geocoding.
+
 ## Endpoints
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/v1/venues/search` | Find venues near `lat`/`lng` matching `q` |
+| GET | `/v1/search` | **Main entry point** — search by venue name, city, or category |
+| GET | `/v1/geocode` | Resolve a place name to coordinates |
+| GET | `/v1/venues/search` | Lower-level: venues near explicit `lat`/`lng` |
 | GET | `/v1/venues/search/progress` | Poll a still-running BestTime radar search |
 | POST | `/v1/venues` | Add a venue by name + address (creates its forecast) |
 | GET | `/v1/venues/{id}` | Venue details with current busyness |
@@ -64,7 +87,8 @@ your remaining credits.
 | GET | `/health` | Status, active data source, cache stats, credits |
 
 ```bash
-curl "http://localhost:8000/v1/venues/search?q=coffee&lat=51.5074&lng=-0.1278"
+curl "http://localhost:8000/v1/search?q=The%20Copper%20Kettle"
+curl "http://localhost:8000/v1/search?q=coffee%20in%20Leeds"
 curl "http://localhost:8000/v1/busy-now?min_score=60"
 curl -X POST "http://localhost:8000/v1/venues/<id>/checkin" \
      -H "Content-Type: application/json" -d '{"level":"busy"}'
@@ -111,7 +135,7 @@ pip install pytest
 python -m pytest tests/ -q
 ```
 
-42 tests, all against the simulated provider — no key or network needed.
+70 tests, all against the simulated provider — no key or network needed.
 BestTime response parsing is covered by feeding known payload shapes
 through the client's parsers.
 
@@ -120,7 +144,9 @@ through the client's parsers.
 ```
 main.py         FastAPI routes; picks BestTime or simulated per request
 besttime.py     BestTime API client + response normalization
-simulated.py    Fallback engine: per-category curves, demo venues
+simulated.py    Fallback engine: per-category curves, name matching
+venues_data.py  Demo venue dataset (fictional names, many cities)
+geocoding.py    Place name -> coordinates (built-in table + Nominatim)
 busyness.py     Levels, check-in store, decay + blending
 cache.py        TTL cache (swap for Redis if running multiple workers)
 config.py       Environment-based settings

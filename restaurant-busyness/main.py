@@ -31,6 +31,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+import geocoding
 import simulated
 from besttime import BestTimeClient, BestTimeError
 from busyness import (
@@ -159,6 +160,210 @@ async def health():
 # ---------------------------------------------------------------------------
 # Venue search
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Unified search — one box for venue names, places, and categories
+# ---------------------------------------------------------------------------
+
+# Words that describe a kind of place rather than a specific one. A query
+# made only of these is an area search; anything else is treated as a
+# venue name first.
+CATEGORY_WORDS = {
+    "restaurant", "restaurants", "cafe", "cafes", "café", "coffee", "bar",
+    "bars", "pub", "pubs", "food", "eat", "drink", "drinks", "breakfast",
+    "brunch", "lunch", "dinner", "takeaway", "bakery", "bistro", "pizzeria",
+    "sushi", "pizza", "burger", "burgers", "curry", "indian", "chinese",
+    "italian", "thai", "mexican", "japanese", "tapas", "steakhouse", "beer",
+    "wine", "cocktails", "tea", "espresso", "diner", "grill", "nearby", "near",
+    "me", "open", "busy", "quiet", "best", "good", "top", "place", "places",
+}
+
+SPLIT_WORDS = (" in ", " near ", " around ", " at ", " by ")
+
+
+def _split_query(raw: str) -> tuple[str, Optional[str]]:
+    """Split "sushi in Leeds" into ("sushi", "Leeds").
+
+    Splits on the last separator so venue names containing one — "Dog
+    in the Pond in Bristol" — resolve the way a person would read them.
+    """
+    text = raw.strip()
+    lowered = text.lower()
+    best = None
+    for word in SPLIT_WORDS:
+        index = lowered.rfind(word)
+        if index > 0 and (best is None or index > best[0]):
+            best = (index, word)
+    if best is None:
+        return text, None
+    index, word = best
+    return text[:index].strip(), text[index + len(word):].strip() or None
+
+
+def _looks_like_a_place_only(term: str) -> bool:
+    """True when the term names a city rather than a venue."""
+    return geocoding.lookup_known_city(term) is not None and len(term.split()) <= 3
+
+
+def _is_category_only(term: str) -> bool:
+    """True when every word describes a kind of venue, not a name."""
+    words = [w.strip(",.!?") for w in term.lower().split() if w.strip(",.!?")]
+    return bool(words) and all(w in CATEGORY_WORDS for w in words)
+
+
+@app.get("/v1/search", tags=["Search"])
+async def unified_search(
+    q: str = Query(..., min_length=1, max_length=200,
+                   description="Venue name, place, or category — "
+                               "'The Copper Kettle', 'coffee in Leeds', 'Manchester'"),
+    near: Optional[str] = Query(None, description="Optional place or 'lat,lng' to search around"),
+    radius: int = Query(5000, ge=100, le=50000),
+    limit: int = Query(24, ge=1, le=100),
+):
+    """Search by venue name, place, or category — the app's main entry point.
+
+    Handles "The Copper Kettle", "coffee in Leeds", "Manchester", and
+    "51.5074, -0.1278" through one parameter, so the UI needs one box.
+    """
+    term, where = _split_query(q)
+    place_text = near or where
+
+    # "Manchester" on its own means "show me what's busy in Manchester".
+    if not place_text and _looks_like_a_place_only(term):
+        place_text, term = term, ""
+
+    location = await geocoding.geocode(place_text) if place_text else None
+    if place_text and location is None:
+        raise HTTPException(404, f"Could not find a place called '{place_text}'")
+
+    interpretation = {
+        "query": q,
+        "term": term or None,
+        "place": location["name"] if location else None,
+        "mode": "area" if (not term or _is_category_only(term)) else "venue",
+    }
+
+    if _using_besttime():
+        return await _besttime_search(term, location, radius, limit, interpretation)
+
+    if not _simulated_allowed():
+        raise HTTPException(503, "No data source available")
+    return _simulated_unified_search(term, location, radius, limit, interpretation)
+
+
+def _simulated_unified_search(term, location, radius, limit, interpretation) -> dict:
+    lat = location["lat"] if location else None
+    lng = location["lng"] if location else None
+
+    if term and not location:
+        # A name with no place: look everywhere rather than nowhere.
+        venues = simulated.search_everywhere(term, limit)
+    else:
+        venues = simulated.search(term, lat, lng, radius if location else None)[:limit]
+
+    now = datetime.now(timezone.utc)
+    results = []
+    for v in venues:
+        baseline = simulated.current_baseline(v, now)
+        results.append({
+            **_public_venue(v),
+            "busyness": blend(baseline, v["venue_id"], now, "predicted"),
+            "distance_km": (round(haversine_km(lat, lng, v["lat"], v["lng"]), 2)
+                            if lat is not None else None),
+        })
+
+    return {"source": "simulated", "interpretation": interpretation,
+            "count": len(results), "results": results}
+
+
+async def _besttime_search(term, location, radius, limit, interpretation) -> dict:
+    """Resolve a search against BestTime.
+
+    A venue-shaped query is looked up by name and address first, since
+    that answers "how busy is this specific place" in one call. Area
+    queries, and venue lookups that find nothing, use the radar search.
+    """
+    if interpretation["mode"] == "venue" and term:
+        address = location["name"] if location else ""
+        cache_key = f"named:{term.lower()}|{address.lower()}"
+        cached = venue_cache.get(cache_key)
+        if cached is not None:
+            return {**cached, "cached": True}
+
+        try:
+            live = await client.live_busyness(venue_name=term, venue_address=address)
+        except (BestTimeError, ValueError) as exc:
+            log.info("Named lookup failed for %r: %s — trying area search", term, exc)
+            live = None
+
+        if live and live.get("venue_id"):
+            baseline = (live["live_busyness"] if live.get("live_available")
+                        else live.get("forecasted_busyness"))
+            source = "live" if live.get("live_available") else "forecast"
+            payload = {
+                "source": "besttime",
+                "interpretation": interpretation,
+                "count": 1,
+                "results": [{
+                    "venue_id": live["venue_id"],
+                    "name": live.get("venue_name") or term,
+                    "address": address or None,
+                    "timezone": live.get("timezone"),
+                    "busyness": blend(baseline, live["venue_id"], None, source),
+                    "live_available": bool(live.get("live_available")),
+                    "distance_km": None,
+                }],
+            }
+            venue_cache.set(cache_key, payload, settings.live_cache_ttl)
+            return {**payload, "cached": False}
+
+    # Area search needs coordinates.
+    if location is None:
+        raise HTTPException(
+            400,
+            "Add a place to search — try 'coffee in Manchester', or include "
+            "a venue's address so it can be found."
+        )
+
+    try:
+        result = await client.search_venues(
+            term or "restaurant", location["lat"], location["lng"],
+            radius=radius, limit=limit,
+        )
+    except BestTimeError as exc:
+        return _fallback_or_error(
+            exc,
+            lambda: _simulated_unified_search(term, location, radius, limit, interpretation),
+        )
+
+    results = []
+    for v in result["venues"]:
+        baseline = v.get("live_busyness")
+        source = "live"
+        if baseline is None:
+            baseline, source = v.get("forecasted_busyness"), "forecast"
+        results.append({
+            **v,
+            "busyness": blend(baseline, v.get("venue_id") or "", None, source),
+            "distance_km": (round(haversine_km(location["lat"], location["lng"],
+                                               v["lat"], v["lng"]), 2)
+                            if v.get("lat") is not None and v.get("lng") is not None
+                            else None),
+        })
+
+    return {"source": "besttime", "interpretation": interpretation,
+            "job_id": result.get("job_id"), "collection_id": result.get("collection_id"),
+            "count": len(results), "results": results}
+
+
+@app.get("/v1/geocode", tags=["Search"])
+async def geocode_place(q: str = Query(..., min_length=1, max_length=200)):
+    """Resolve a place name to coordinates. Useful for debugging search."""
+    location = await geocoding.geocode(q)
+    if location is None:
+        raise HTTPException(404, f"Could not find a place called '{q}'")
+    return location
+
 
 @app.get("/v1/venues/search", tags=["Venues"])
 async def search_venues(

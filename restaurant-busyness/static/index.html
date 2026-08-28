@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Busy or Not — live venue busyness</title>
+<title>Busy or Not — is it busy right now?</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%234ade80'/></svg>">
 <link rel="stylesheet" href="/static/app.css">
 </head>
@@ -17,34 +17,39 @@
 </header>
 
 <main>
-  <form class="search" id="search-form">
-    <div class="field">
-      <label for="q">What are you looking for?</label>
-      <input id="q" name="q" type="text" value="coffee"
-             placeholder="coffee, sushi, pizza, bar…" autocomplete="off">
-    </div>
-    <div class="field location">
-      <label for="loc">Near</label>
-      <div class="loc-row">
-        <input id="loc" type="text" value="51.5074, -0.1278"
-               placeholder="latitude, longitude" autocomplete="off">
-        <button type="button" id="geo-btn" title="Use my location">Use my location</button>
-      </div>
-    </div>
-    <div class="field">
-      <label for="radius">Within</label>
-      <select id="radius">
-        <option value="1000">1 km</option>
-        <option value="2000">2 km</option>
-        <option value="5000" selected>5 km</option>
-        <option value="10000">10 km</option>
-        <option value="25000">25 km</option>
-      </select>
-    </div>
-    <button type="submit" class="primary" id="search-btn">Search</button>
-  </form>
+  <section class="hero">
+    <h2>Is it busy right now?</h2>
+    <p class="tagline">Search a restaurant, cafe or bar by name — or a whole city.</p>
 
-  <div class="controls">
+    <form class="searchbar" id="search-form" role="search" autocomplete="off">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" aria-hidden="true">
+        <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
+      </svg>
+      <input id="q" name="q" type="search" enterkeyhint="search"
+             placeholder="Try “The Copper Kettle”, “coffee in Leeds”, or “Manchester”"
+             aria-label="Search a venue or place">
+      <button type="button" id="geo-btn" class="icon-btn" title="Search near me"
+              aria-label="Search near me">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
+          <circle cx="12" cy="12" r="8"/>
+        </svg>
+      </button>
+      <button type="submit" class="primary" id="search-btn">Search</button>
+    </form>
+
+    <div class="examples" id="examples">
+      <span>Try:</span>
+      <button class="example" data-q="The Copper Kettle">The Copper Kettle</button>
+      <button class="example" data-q="coffee in Leeds">coffee in Leeds</button>
+      <button class="example" data-q="Manchester">Manchester</button>
+      <button class="example" data-q="sushi in London">sushi in London</button>
+      <button class="example" data-q="Edinburgh">Edinburgh</button>
+    </div>
+  </section>
+
+  <div class="controls" id="controls" hidden>
     <div class="filters" id="filters">
       <button class="chip active" data-filter="all">All</button>
       <button class="chip" data-filter="quiet">Quiet now</button>
@@ -53,6 +58,7 @@
     <label class="sort">
       Sort
       <select id="sort">
+        <option value="relevance">Best match</option>
         <option value="busyness">Busiest first</option>
         <option value="quietest">Quietest first</option>
         <option value="distance">Nearest</option>
@@ -66,7 +72,6 @@
   <section class="grid" id="results"></section>
 </main>
 
-<!-- Venue detail drawer -->
 <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
 <aside class="drawer" id="drawer" hidden aria-label="Venue details">
   <button class="close" id="drawer-close" aria-label="Close">×</button>

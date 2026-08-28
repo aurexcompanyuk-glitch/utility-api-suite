@@ -1,14 +1,15 @@
 /* Busy or Not — frontend for the Restaurant & Cafe Busyness API.
-   No build step, no dependencies. Talks to the same origin. */
+   One search box: venue names, cities, and categories all go to
+   /v1/search, which works out what was meant. No build step, no deps. */
 
 const $ = (sel) => document.querySelector(sel);
 
 const state = {
   venues: [],
   filter: "all",
-  sort: "busyness",
-  radius: 5000,      // metres
-  origin: null,      // {lat, lng} used for the last search
+  sort: "relevance",
+  origin: null,        // {lat, lng} of the resolved place, when there is one
+  lastQuery: "",
   drawerVenue: null,
   forecastDay: null,
 };
@@ -38,6 +39,11 @@ function setStatus(msg, isError = false) {
   el.classList.toggle("error", Boolean(isError));
 }
 
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
 function levelClass(b) {
   return b && b.level ? LEVEL_CLASS[b.level] || "none" : "none";
 }
@@ -47,23 +53,17 @@ function levelText(b) {
   return LEVEL_TEXT[b.level] || "Unknown";
 }
 
-function parseLatLng(text) {
-  const m = String(text).split(",").map((p) => parseFloat(p.trim()));
-  if (m.length !== 2 || m.some(Number.isNaN)) return null;
-  if (m[0] < -90 || m[0] > 90 || m[1] < -180 || m[1] > 180) return null;
-  return { lat: m[0], lng: m[1] };
-}
-
 /* Circular busyness gauge. */
-function ring(score, cls) {
-  const r = 22, circ = 2 * Math.PI * r;
+function ring(score, cls, size = 54) {
+  const r = size / 2 - 5, circ = 2 * Math.PI * r;
   const pct = score === null || score === undefined ? 0 : score / 100;
   const label = score === null || score === undefined ? "–" : score;
   return `
-    <div class="ring">
-      <svg width="54" height="54" viewBox="0 0 54 54" aria-hidden="true">
-        <circle class="track" cx="27" cy="27" r="${r}" fill="none" stroke-width="5"/>
-        <circle class="value stroke-${cls}" cx="27" cy="27" r="${r}" fill="none" stroke-width="5"
+    <div class="ring" style="width:${size}px;height:${size}px">
+      <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">
+        <circle class="track" cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke-width="5"/>
+        <circle class="value stroke-${cls}" cx="${size / 2}" cy="${size / 2}" r="${r}"
+                fill="none" stroke-width="5"
                 stroke-dasharray="${(circ * pct).toFixed(1)} ${circ.toFixed(1)}"/>
       </svg>
       <div class="num ${cls}">${label}</div>
@@ -83,6 +83,8 @@ function visibleVenues() {
 
   const score = (v) => v.busyness?.busyness_score ?? -1;
   const sorters = {
+    // The API already returns best-match order; keep it as received.
+    relevance: null,
     busyness: (a, b) => score(b) - score(a),
     quietest: (a, b) => {
       const [x, y] = [score(a), score(b)];
@@ -93,15 +95,19 @@ function visibleVenues() {
     distance: (a, b) => (a.distance_km ?? 1e9) - (b.distance_km ?? 1e9),
     name: (a, b) => String(a.name || "").localeCompare(String(b.name || "")),
   };
-  return list.sort(sorters[state.sort] || sorters.busyness);
+  const sorter = sorters[state.sort];
+  return sorter ? list.sort(sorter) : list;
 }
 
 function renderResults() {
   const list = visibleVenues();
   const grid = $("#results");
+  $("#controls").hidden = state.venues.length === 0;
 
   if (!list.length) {
-    grid.innerHTML = `<p class="empty">No venues match. Try a different search or filter.</p>`;
+    grid.innerHTML = state.venues.length
+      ? `<p class="empty">Nothing matches this filter.</p>`
+      : `<p class="empty">No venues found. Try a different name or city.</p>`;
     return;
   }
 
@@ -116,7 +122,7 @@ function renderResults() {
         <div class="card-head">
           <div style="min-width:0">
             <h3>${escapeHtml(v.name || "Unnamed venue")}</h3>
-            <p class="addr">${escapeHtml(v.address || "")}</p>
+            <p class="addr">${escapeHtml(v.address || v.timezone || "")}</p>
           </div>
           ${ring(b.busyness_score, cls)}
         </div>
@@ -129,7 +135,6 @@ function renderResults() {
       </article>`;
   }).join("");
 
-  // Index into the same sorted list the markup was built from.
   grid.querySelectorAll(".card").forEach((card) => {
     const open = () => openDrawer(list[Number(card.dataset.index)]);
     card.addEventListener("click", open);
@@ -139,12 +144,8 @@ function renderResults() {
   });
 }
 
-function escapeHtml(str) {
-  return String(str).replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
-
 function showSkeletons(n = 6) {
+  $("#controls").hidden = true;
   $("#results").innerHTML = Array.from({ length: n }, () => `
     <article class="card skeleton">
       <div class="card-head">
@@ -160,47 +161,47 @@ function showSkeletons(n = 6) {
 
 /* ---------- search ---------- */
 
-async function runSearch() {
-  const q = $("#q").value.trim() || "restaurant";
-  const coords = parseLatLng($("#loc").value);
-  if (!coords) {
-    setStatus("Enter a location as 'latitude, longitude', e.g. 51.5074, -0.1278", true);
-    return;
-  }
+async function runSearch(query, extra = {}) {
+  const q = (query ?? $("#q").value).trim();
+  if (!q) { setStatus("Type a venue name or a place to search."); return; }
 
-  state.origin = coords;
+  $("#q").value = q;
+  state.lastQuery = q;
   $("#search-btn").disabled = true;
   setStatus("Searching…");
   showSkeletons();
 
-  const params = new URLSearchParams({
-    q, lat: coords.lat, lng: coords.lng,
-    radius: String(state.radius), limit: "24",
-  });
+  const params = new URLSearchParams({ q, radius: "5000", limit: "24", ...extra });
 
   try {
-    const data = await api(`/v1/venues/search?${params}`);
+    const data = await api(`/v1/search?${params}`);
     state.venues = data.results || [];
+    state.origin = data.interpretation?.place ? true : null;
+    // Best-match order only means something for a name search.
+    state.sort = data.interpretation?.mode === "venue" ? "relevance" : "busyness";
+    $("#sort").value = state.sort;
     renderResults();
-
-    const bits = [`${state.venues.length} venue${state.venues.length === 1 ? "" : "s"}`];
-    if (data.source) bits.push(`source: ${data.source}`);
-    if (data.cached) bits.push("cached");
-    setStatus(bits.join(" · "));
-
-    if (data.source === "simulated_fallback") {
-      setStatus(`${bits.join(" · ")} — BestTime unavailable, showing simulated data`, true);
-    }
-    // A radar search can still be running when it returns nothing yet.
-    if (!state.venues.length && data.job_id) {
-      setStatus("BestTime is still collecting venues for this area — try again shortly.");
-    }
+    setStatus(describeResults(data));
   } catch (err) {
+    state.venues = [];
+    renderResults();
     setStatus(err.message, true);
-    $("#results").innerHTML = `<p class="empty">${escapeHtml(err.message)}</p>`;
   } finally {
     $("#search-btn").disabled = false;
   }
+}
+
+function describeResults(data) {
+  const n = data.count ?? 0;
+  const where = data.interpretation?.place;
+  const bits = [`${n} ${n === 1 ? "venue" : "venues"}${where ? ` in ${where}` : ""}`];
+  if (data.source === "simulated") bits.push("demo data");
+  if (data.source === "simulated_fallback") bits.push("BestTime unavailable — showing demo data");
+  if (data.cached) bits.push("cached");
+  if (!n && data.job_id) {
+    return "BestTime is still collecting venues for this area — search again in a moment.";
+  }
+  return bits.join(" · ");
 }
 
 async function refreshBusyness() {
@@ -222,7 +223,8 @@ async function refreshBusyness() {
 async function openDrawer(venue) {
   if (!venue) return;
   state.drawerVenue = venue;
-  state.forecastDay = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1;
+  const today = new Date().getDay();
+  state.forecastDay = today === 0 ? 6 : today - 1;
 
   $("#drawer").hidden = false;
   $("#drawer-backdrop").hidden = false;
@@ -234,7 +236,7 @@ async function openDrawer(venue) {
     <h2>${escapeHtml(venue.name || "Venue")}</h2>
     <p class="addr">${escapeHtml(venue.address || "")}</p>
     <div class="now">
-      ${ring(b.busyness_score, cls)}
+      ${ring(b.busyness_score, cls, 64)}
       <div>
         <div class="big ${cls}">${levelText(b)}</div>
         <div class="sub">${escapeHtml(describeSource(b))}</div>
@@ -293,7 +295,8 @@ async function loadForecast(venue) {
     const hours = day?.hours || [];
     if (!hours.length) { area.innerHTML = `<p class="hint">No forecast for this day.</p>`; return; }
 
-    const isToday = state.forecastDay === (new Date().getDay() === 0 ? 6 : new Date().getDay() - 1);
+    const today = new Date().getDay();
+    const isToday = state.forecastDay === (today === 0 ? 6 : today - 1);
     const currentHour = new Date().getHours();
 
     area.innerHTML = `
@@ -325,7 +328,7 @@ async function submitCheckin(venue, level) {
     const b = data.busyness, cls = levelClass(b);
     const now = $(".now");
     if (now) {
-      now.innerHTML = `${ring(b.busyness_score, cls)}
+      now.innerHTML = `${ring(b.busyness_score, cls, 64)}
         <div><div class="big ${cls}">${levelText(b)}</div>
         <div class="sub">${escapeHtml(describeSource(b))}</div></div>`;
     }
@@ -352,6 +355,11 @@ $("#drawer-close").addEventListener("click", closeDrawer);
 $("#drawer-backdrop").addEventListener("click", closeDrawer);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
 
+$("#examples").addEventListener("click", (e) => {
+  const btn = e.target.closest(".example");
+  if (btn) runSearch(btn.dataset.q);
+});
+
 $("#filters").addEventListener("click", (e) => {
   const btn = e.target.closest(".chip");
   if (!btn) return;
@@ -362,26 +370,22 @@ $("#filters").addEventListener("click", (e) => {
 
 $("#sort").addEventListener("change", (e) => { state.sort = e.target.value; renderResults(); });
 
-$("#radius").addEventListener("change", (e) => {
-  state.radius = Number(e.target.value);
-  runSearch();
-});
-
 $("#geo-btn").addEventListener("click", () => {
   if (!navigator.geolocation) { setStatus("Geolocation is not supported here.", true); return; }
   setStatus("Getting your location…");
   navigator.geolocation.getCurrentPosition(
     (pos) => {
-      $("#loc").value = `${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`;
-      setStatus("Location set.");
-      runSearch();
+      const coords = `${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`;
+      const term = $("#q").value.trim();
+      // Keep what they typed and search it around here.
+      runSearch(term && !term.includes(",") ? term : "restaurant", { near: coords });
     },
     (err) => setStatus(`Could not get location: ${err.message}`, true),
     { timeout: 10000 }
   );
 });
 
-/* Show which data source is live, then run an initial search. */
+/* Show which data source is live. */
 (async function init() {
   try {
     const health = await api("/health");
@@ -389,8 +393,7 @@ $("#geo-btn").addEventListener("click", () => {
     badge.textContent = health.data_source === "besttime"
       ? "live data · BestTime" : "demo data · simulated";
     if (health.besttime && health.besttime.reachable === false) {
-      badge.textContent = "BestTime unreachable · simulated";
+      badge.textContent = "BestTime unreachable · demo data";
     }
   } catch { $("#source-badge").textContent = ""; }
-  runSearch();
 })();

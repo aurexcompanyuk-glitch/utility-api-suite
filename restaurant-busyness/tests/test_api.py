@@ -5,6 +5,7 @@ no network access required. BestTime response parsing is covered by
 feeding recorded-shape payloads through the client's parsers.
 """
 
+import asyncio
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -15,10 +16,11 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import besttime  # noqa: E402
+import geocoding  # noqa: E402
 import simulated  # noqa: E402
 from busyness import CheckinLevel, blend, checkins, score_to_level  # noqa: E402
 from cache import TTLCache  # noqa: E402
-from main import app  # noqa: E402
+from main import _is_category_only, _split_query, app  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -99,6 +101,138 @@ def test_search_radius_excludes_distant_venues(client):
     near = client.get("/v1/venues/search?q=&lat=51.5074&lng=-0.1278&radius=500").json()
     far = client.get("/v1/venues/search?q=&lat=51.5074&lng=-0.1278&radius=50000").json()
     assert near["count"] < far["count"]
+
+
+# -- unified search (the main entry point) ----------------------------
+
+def test_search_by_exact_venue_name(client):
+    body = client.get("/v1/search?q=The Copper Kettle").json()
+    assert body["interpretation"]["mode"] == "venue"
+    assert body["results"][0]["name"] == "The Copper Kettle"
+
+
+def test_search_by_partial_venue_name(client):
+    body = client.get("/v1/search?q=copper kettle").json()
+    assert body["results"][0]["name"] == "The Copper Kettle"
+
+
+def test_search_tolerates_typos(client):
+    body = client.get("/v1/search?q=coper kettel").json()
+    assert body["count"] > 0
+    assert body["results"][0]["name"] == "The Copper Kettle"
+
+
+def test_search_by_city_lists_that_citys_venues(client):
+    body = client.get("/v1/search?q=Manchester").json()
+    assert body["interpretation"]["mode"] == "area"
+    assert body["interpretation"]["place"] == "Manchester, UK"
+    assert body["count"] > 1
+    assert all("Manchester" in v["address"] for v in body["results"])
+
+
+def test_search_category_in_a_place(client):
+    body = client.get("/v1/search?q=coffee in Leeds").json()
+    assert body["interpretation"]["place"] == "Leeds, UK"
+    assert body["count"] > 0
+    assert all("Leeds" in v["address"] for v in body["results"])
+
+
+def test_search_every_result_carries_busyness(client):
+    for query in ["Manchester", "coffee in Leeds", "The Copper Kettle"]:
+        for venue in client.get(f"/v1/search?q={query}").json()["results"]:
+            score = venue["busyness"]["busyness_score"]
+            assert score is not None and 0 <= score <= 100
+            assert venue["busyness"]["level"] in {
+                "not_busy", "moderate", "busy", "very_busy"}
+
+
+def test_search_accepts_raw_coordinates_as_a_place(client):
+    body = client.get("/v1/search?q=coffee&near=51.5074,-0.1278").json()
+    assert body["count"] > 0
+
+
+def test_search_unknown_place_returns_404(client):
+    res = client.get("/v1/search?q=coffee in Zzzyxqville")
+    assert res.status_code == 404
+
+
+def test_search_unknown_name_returns_empty_not_an_error(client):
+    body = client.get("/v1/search?q=zzzz nothing here").json()
+    assert body["count"] == 0
+    assert body["results"] == []
+
+
+def test_search_requires_a_query(client):
+    assert client.get("/v1/search?q=").status_code == 422
+
+
+def test_name_search_without_a_place_searches_everywhere(client):
+    # "Royal Mile Roasters" is in Edinburgh; no city given.
+    body = client.get("/v1/search?q=Royal Mile Roasters").json()
+    assert body["count"] > 0
+    assert body["results"][0]["name"] == "Royal Mile Roasters"
+
+
+@pytest.mark.parametrize("query,term,place", [
+    ("coffee in Leeds", "coffee", "Leeds"),
+    ("sushi near Manchester", "sushi", "Manchester"),
+    ("The Ivy in London", "The Ivy", "London"),
+    ("Manchester", "Manchester", None),
+    ("The Dog in the Pond in Bristol", "The Dog in the Pond", "Bristol"),
+])
+def test_query_splitting(query, term, place):
+    assert _split_query(query) == (term, place)
+
+
+@pytest.mark.parametrize("term,expected", [
+    ("coffee", True), ("restaurants", True), ("best pizza", True),
+    ("The Copper Kettle", False), ("Sakura", False),
+])
+def test_category_only_detection(term, expected):
+    assert _is_category_only(term) is expected
+
+
+# -- geocoding --------------------------------------------------------
+
+def test_geocode_known_city_needs_no_network():
+    result = asyncio.run(geocoding.geocode("Manchester"))
+    assert result["source"] == "builtin"
+    assert round(result["lat"], 1) == 53.5
+
+
+def test_geocode_parses_raw_coordinates():
+    result = asyncio.run(geocoding.geocode("51.5074, -0.1278"))
+    assert result["source"] == "coordinates"
+    assert result["lat"] == 51.5074
+
+
+def test_geocode_is_case_insensitive():
+    assert asyncio.run(geocoding.geocode("MANCHESTER"))["name"] == "Manchester, UK"
+
+
+def test_geocode_rejects_out_of_range_coordinates():
+    assert geocoding.parse_coordinates("999, 999") is None
+    assert geocoding.parse_coordinates("not coords") is None
+
+
+def test_geocode_endpoint(client):
+    body = client.get("/v1/geocode?q=Edinburgh").json()
+    assert body["name"] == "Edinburgh, UK"
+    assert client.get("/v1/geocode?q=Zzzyxqville").status_code == 404
+
+
+# -- name matching ----------------------------------------------------
+
+def test_exact_name_outranks_partial_match():
+    venue = simulated.DEMO_VENUES[SIM_VENUE_ID]
+    exact = simulated.match_score(venue, venue["name"])
+    partial = simulated.match_score(venue, venue["name"].split()[-1])
+    assert exact > partial > 0
+
+
+def test_unrelated_query_scores_zero():
+    venue = simulated.DEMO_VENUES[SIM_VENUE_ID]
+    assert simulated.match_score(venue, "quantum tractor supplies") == 0.0
 
 
 # -- venue detail and forecast ---------------------------------------

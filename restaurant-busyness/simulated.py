@@ -6,12 +6,13 @@ without spending BestTime credits. Curves are realistic in shape
 and deterministic per venue per day, so results are stable within a day.
 """
 
+import difflib
 import hashlib
 import random
 from datetime import date, datetime
 from typing import Optional
 
-from busyness import clamp_score, score_to_level
+from busyness import clamp_score, haversine_km, score_to_level
 
 # 24-hour baseline curves (0-100). Index 0 = midnight, 23 = 11pm.
 BASE_CURVES = {
@@ -29,23 +30,12 @@ BASE_CURVES = {
     },
 }
 
-DEMO_VENUES_RAW = [
-    ("The Copper Kettle", "cafe", "14 High Street", "London", 51.5074, -0.1278, 2, 4.4),
-    ("Bean & Barrel", "cafe", "88 Baker Street", "London", 51.5205, -0.1567, 2, 4.6),
-    ("Trattoria Milano", "restaurant", "22 Via Roma", "London", 51.5099, -0.1180, 3, 4.5),
-    ("The Rusty Anchor", "bar", "5 Ocean Drive", "London", 51.5033, -0.1195, 2, 4.1),
-    ("Sakura Sushi House", "restaurant", "9 Park Avenue", "London", 51.5142, -0.0931, 3, 4.7),
-    ("Corner Espresso", "cafe", "3 King's Road", "London", 51.4875, -0.1687, 1, 4.3),
-    ("The Gilded Fork", "restaurant", "41 Regent Street", "London", 51.5101, -0.1367, 4, 4.6),
-    ("Blue Moon Tavern", "bar", "17 Camden High St", "London", 51.5390, -0.1426, 2, 4.0),
-    ("Morning Glory Cafe", "cafe", "60 Portobello Rd", "London", 51.5170, -0.2040, 1, 4.2),
-    ("Spice Route", "restaurant", "31 Brick Lane", "London", 51.5225, -0.0715, 2, 4.4),
-]
+from venues_data import VENUE_ROWS
 
 
 def _build_demo_venues() -> dict[str, dict]:
     venues = {}
-    for name, cat, addr, city, lat, lng, price, rating in DEMO_VENUES_RAW:
+    for name, cat, addr, city, lat, lng, price, rating in VENUE_ROWS:
         vid = "sim_" + hashlib.sha1(name.encode()).hexdigest()[:10]
         venues[vid] = {
             "venue_id": vid,
@@ -122,24 +112,83 @@ def _categories_for_query(q: str) -> set[str]:
             if any(word in q for word in words)}
 
 
+def match_score(venue: dict, query: str) -> float:
+    """How well a venue matches a free-text query, from 0 to 1.
+
+    Exact and prefix name matches rank hardest, then fuzzy name
+    similarity (so "copper kettle" still finds "The Copper Kettle" and
+    typos degrade gracefully), then city, address, and category.
+    """
+    if not query:
+        return 0.1
+
+    q = query.lower().strip()
+    name = venue["name"].lower()
+    city = venue.get("city", "").lower()
+    address = venue.get("address", "").lower()
+
+    if q == name:
+        return 1.0
+    if name.startswith(q):
+        return 0.95
+    if q in name:
+        return 0.9
+
+    # Every word of the query appearing in the name, in any order.
+    words = [w for w in q.split() if len(w) > 2]
+    if words and all(w in name for w in words):
+        return 0.85
+
+    fuzzy = difflib.SequenceMatcher(None, q, name).ratio()
+    if fuzzy > 0.7:
+        return 0.6 + (fuzzy - 0.7) * 0.8   # 0.6 - 0.84
+
+    if q == city:
+        return 0.55
+    if q in city or q in address:
+        return 0.5
+    if _category(venue) in _categories_for_query(q):
+        return 0.4
+    if any(w in name or w in address or w in city for w in words):
+        return 0.3
+
+    return 0.0
+
+
 def search(query: Optional[str] = None, lat: Optional[float] = None,
-           lng: Optional[float] = None, radius: Optional[int] = None) -> list[dict]:
-    """Name/address/type search over the demo venue set."""
-    results = list(DEMO_VENUES.values())
-    if query:
-        q = query.lower().strip()
-        categories = _categories_for_query(q)
-        results = [
-            v for v in results
-            if q in v["name"].lower()
-            or q in v["address"].lower()
-            or q in v["venue_type"].lower()
-            or _category(v) in categories
-        ]
+           lng: Optional[float] = None, radius: Optional[int] = None,
+           min_score: float = 0.25) -> list[dict]:
+    """Search demo venues by name, city, address, or category.
+
+    Results are ranked by match quality; location, when given, filters
+    by radius and breaks ties between equally good matches.
+    """
+    candidates = list(DEMO_VENUES.values())
+
     if lat is not None and lng is not None and radius:
-        from busyness import haversine_km
-        results = [
-            v for v in results
+        candidates = [
+            v for v in candidates
             if haversine_km(lat, lng, v["lat"], v["lng"]) * 1000 <= radius
         ]
-    return results
+
+    if not query:
+        return candidates
+
+    scored = []
+    for venue in candidates:
+        score = match_score(venue, query)
+        if score >= min_score:
+            distance = (haversine_km(lat, lng, venue["lat"], venue["lng"])
+                        if lat is not None and lng is not None else 0.0)
+            scored.append((score, -distance, venue))
+
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [venue for _, _, venue in scored]
+
+
+def search_everywhere(query: str, limit: int = 24) -> list[dict]:
+    """Name search across every city, ignoring location entirely.
+
+    Used when someone searches a venue by name without saying where.
+    """
+    return search(query, min_score=0.5)[:limit]

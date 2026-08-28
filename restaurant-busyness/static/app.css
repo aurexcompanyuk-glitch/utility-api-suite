@@ -68,20 +68,61 @@ body {
 
 main { max-width: 1100px; margin: 0 auto; padding: 20px; }
 
-/* --- search ------------------------------------------------------- */
+/* --- hero search -------------------------------------------------- */
 
-.search {
-  display: grid; gap: 12px; align-items: end;
-  grid-template-columns: 1.1fr 1.3fr auto auto;
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 14px; padding: 16px;
+.hero { text-align: center; padding: 34px 0 26px; }
+.hero h2 {
+  font-size: clamp(26px, 4.4vw, 38px); margin: 0 0 8px;
+  font-weight: 680; letter-spacing: -0.025em;
 }
-@media (max-width: 720px) { .search { grid-template-columns: 1fr; } }
+.tagline { color: var(--muted); margin: 0 0 26px; font-size: 15px; }
 
-.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.field label { font-size: 12px; color: var(--muted); font-weight: 500; }
-.loc-row { display: flex; gap: 8px; }
-.loc-row input { flex: 1; min-width: 0; }
+.searchbar {
+  display: flex; align-items: center; gap: 8px;
+  max-width: 680px; margin: 0 auto; padding: 7px 7px 7px 15px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 999px; box-shadow: 0 2px 14px rgba(0,0,0,.06);
+  transition: border-color .15s, box-shadow .15s;
+}
+.searchbar:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.searchbar .icon { width: 19px; height: 19px; color: var(--muted); flex-shrink: 0; }
+
+.searchbar input {
+  flex: 1; min-width: 0; border: none; background: none;
+  padding: 11px 2px; font-size: 15.5px; color: var(--text);
+}
+.searchbar input:focus { outline: none; }
+.searchbar input::placeholder { color: var(--muted); }
+.searchbar input::-webkit-search-cancel-button { cursor: pointer; }
+
+.icon-btn {
+  background: none; border: none; color: var(--muted);
+  padding: 8px; display: grid; place-items: center; border-radius: 50%;
+  flex-shrink: 0;
+}
+.icon-btn svg { width: 19px; height: 19px; }
+.icon-btn:hover { color: var(--accent); background: var(--surface-2); }
+
+.searchbar .primary { border-radius: 999px; padding: 11px 22px; flex-shrink: 0; }
+
+@media (max-width: 560px) {
+  .searchbar { flex-wrap: wrap; border-radius: 20px; padding: 10px; }
+  .searchbar input { flex: 1 1 100%; order: -1; padding: 8px 6px; }
+  .searchbar .primary { flex: 1; }
+}
+
+.examples {
+  display: flex; gap: 7px; justify-content: center; flex-wrap: wrap;
+  margin-top: 18px; font-size: 13px; color: var(--muted); align-items: center;
+}
+.example {
+  background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--muted); font-size: 12.5px; padding: 5px 12px; border-radius: 999px;
+}
+.example:hover { border-color: var(--accent); color: var(--accent); }
 
 input, select {
   background: var(--surface-2); color: var(--text);
