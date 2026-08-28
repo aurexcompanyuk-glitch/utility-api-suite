@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import besttime  # noqa: E402
 import osm  # noqa: E402
 import rhythms  # noqa: E402
+import venue_index  # noqa: E402
 import geocoding  # noqa: E402
 import simulated  # noqa: E402
 from busyness import CheckinLevel, blend, checkins, score_to_level  # noqa: E402
@@ -593,3 +594,65 @@ def test_overpass_query_covers_everything_by_default():
     q = osm.build_query(51.5, -0.12, 800)
     for tag in ("restaurant", "pharmacy", "supermarket", "fitness_centre", "museum"):
         assert tag in q
+
+
+# -- credit efficiency -------------------------------------------------
+# BestTime bills per call, and a name lookup costs twice an id read.
+# These tests exist so a regression here shows up as a failure, not a bill.
+
+def test_index_resolves_a_name_once_then_reuses_the_id(tmp_path):
+    idx = venue_index.VenueIndex(path=str(tmp_path / "i.json"))
+    assert idx.get("The Ivy", "London") is None
+    idx.put("The Ivy", "London", "ven_1")
+    assert idx.get("The Ivy", "London") == "ven_1"
+    assert idx.stats()["hits"] == 1
+
+
+def test_index_normalises_punctuation_and_case(tmp_path):
+    idx = venue_index.VenueIndex(path=str(tmp_path / "i.json"))
+    idx.put("The Ivy,", "London", "ven_1")
+    assert idx.get("  the   ivy ", "LONDON") == "ven_1"
+
+
+def test_index_remembers_a_confirmed_absence(tmp_path):
+    # Without this, a venue BestTime doesn't cover is re-bought every search.
+    idx = venue_index.VenueIndex(path=str(tmp_path / "i.json"))
+    assert idx.known("Ghost Diner", "Nowhere") is False
+    idx.put("Ghost Diner", "Nowhere", None)
+    assert idx.known("Ghost Diner", "Nowhere") is True
+    assert idx.get("Ghost Diner", "Nowhere") is None
+
+
+def test_index_survives_a_restart(tmp_path):
+    path = str(tmp_path / "i.json")
+    venue_index.VenueIndex(path=path).put("Cafe X", "Leeds", "ven_9")
+    # Re-resolving after a deploy would cost real money.
+    assert venue_index.VenueIndex(path=path).get("Cafe X", "Leeds") == "ven_9"
+
+
+def test_index_tolerates_a_corrupt_file(tmp_path):
+    path = tmp_path / "i.json"
+    path.write_text("{ not json")
+    idx = venue_index.VenueIndex(path=str(path))
+    assert idx.stats()["entries"] == 0
+    idx.put("A", "B", "ven_2")
+    assert idx.get("A", "B") == "ven_2"
+
+
+def test_credit_meter_prices_endpoints_correctly():
+    meter = venue_index.CreditMeter()
+    meter.record("by_name")                 # 2 credits
+    meter.record("by_id")                   # 1 credit
+    meter.record("by_filter", 30)           # 1 per 10 venues = 3
+    assert meter.stats()["credits_spent_estimate"] == 6.0
+
+
+def test_filter_is_twenty_times_cheaper_than_name_lookup():
+    rates = venue_index.CreditMeter.RATES
+    assert rates["by_name"] / rates["by_filter"] == 20
+
+
+def test_health_reports_index_and_spend(client):
+    body = client.get("/health").json()
+    assert "venue_index" in body
+    assert "credits_spent_estimate" in body["besttime_spend"]

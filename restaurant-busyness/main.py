@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 
 import geocoding
 import osm
+import venue_index
 import rhythms
 import simulated
 from besttime import BestTimeClient, BestTimeError
@@ -146,6 +147,8 @@ async def health():
             "forecast": forecast_cache.stats(),
             "venues": venue_cache.stats(),
         },
+        "venue_index": venue_index.index.stats(),
+        "besttime_spend": venue_index.meter.stats(),
     }
 
     if _using_besttime():
@@ -294,10 +297,28 @@ async def _besttime_search(term, location, radius, limit, interpretation) -> dic
         if cached is not None:
             return {**cached, "cached": True}
 
+        # Resolving a name costs 2 credits; reading a known id costs 1,
+        # so a name is only ever resolved once and then remembered.
+        known_id = venue_index.index.get(term, address)
+        already_tried = venue_index.index.known(term, address)
+
+        live = None
         try:
-            live = await client.live_busyness(venue_name=term, venue_address=address)
+            if known_id:
+                live = await client.live_busyness(venue_id=known_id)
+                venue_index.meter.record("by_id")
+            elif not already_tried:
+                live = await client.live_busyness(venue_name=term, venue_address=address)
+                venue_index.meter.record("by_name")
+                # Remember the outcome either way: a confirmed absence is
+                # worth as much as a hit, since it stops us re-buying it.
+                venue_index.index.put(term, address, live.get("venue_id") if live else None)
+            # A remembered absence falls straight through to the area search
+            # without spending anything.
         except (BestTimeError, ValueError) as exc:
             log.info("Named lookup failed for %r: %s — trying area search", term, exc)
+            if not already_tried and not known_id:
+                venue_index.index.put(term, address, None)
             live = None
 
         if live and live.get("venue_id"):
@@ -540,6 +561,7 @@ async def add_venue(req: AddVenueRequest):
         result = await client.create_forecast(
             req.venue_name, req.venue_address, settings.collection_id
         )
+        venue_index.meter.record("forecast")
     except BestTimeError as exc:
         raise HTTPException(502, f"BestTime error: {exc}")
 
@@ -613,6 +635,7 @@ async def _live_busyness(venue_id: str) -> dict:
     if data is None:
         try:
             data = await client.live_busyness(venue_id=venue_id)
+            venue_index.meter.record("by_id")
         except BestTimeError as exc:
             if exc.status_code == 404:
                 raise HTTPException(404, "Venue not found in BestTime")
@@ -746,6 +769,7 @@ async def busy_now(
     """Venues that are busiest at this moment, most crowded first."""
     if _using_besttime():
         try:
+            # 1 credit per 10 venues — the cheapest way to read many.
             venues = await client.filter_venues(
                 collection_id=collection_id or settings.collection_id,
                 busy_min=min_score or None,
@@ -755,6 +779,7 @@ async def busy_now(
             )
         except BestTimeError as exc:
             return _fallback_or_error(exc, lambda: _simulated_busy_now(min_score, limit))
+        venue_index.meter.record("by_filter", len(venues))
 
         results = []
         for v in venues:
