@@ -1,351 +1,532 @@
 """
 Restaurant & Cafe Busyness API
+
 Tells you how busy restaurants, cafes, and bars are right now, plus a
-predicted busyness curve for the day — similar in spirit to Google's
-"Popular Times".
+forecast for the rest of the week.
 
-Data model:
-  - Each venue has a base weekly busyness curve (24 values/day, by
-    weekday vs weekend) representative of its category.
-  - A small deterministic daily jitter is applied per venue so the
-    curve varies day to day without being random noise on every request.
-  - Live crowdsourced check-ins (POST /v1/venues/{id}/checkin) are
-    blended into the baseline to reflect real-time conditions — the more
-    recent check-ins a venue has, the more the live estimate leans on
-    them over the predicted baseline.
+Data sources, in priority order:
+  1. BestTime.app  — real foot-traffic data, used when
+     BESTTIME_API_KEY_PRIVATE is set.
+  2. Simulated     — realistic per-category curves, used when no key is
+     configured (local dev, tests, demos) or when BestTime is
+     unreachable and ALLOW_SIMULATED_FALLBACK is on.
 
-No external API keys required to run. The venue store is in-memory
-(swap `VENUES`/`CHECKINS` for a real database in production); the curve
-generator is isolated in `predict_curve()` so it can later be replaced
-with real historical data (e.g. from a Google Places-style source)
-without touching the rest of the API.
+Crowdsourced check-ins are blended on top of whichever source is active.
+They matter most where BestTime reports no live coverage for a venue.
+
+The BestTime private key is only ever used server-side and is never
+included in a response.
 
 Run locally:  uvicorn main:app --reload
 """
 
-import hashlib
-import math
-import random
-from datetime import datetime, timedelta, timezone
-from enum import Enum
+import logging
+import os
+from contextlib import asynccontextmanager
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+
+import simulated
+from besttime import BestTimeClient, BestTimeError
+from busyness import (
+    CheckinLevel,
+    blend,
+    checkins,
+    haversine_km,
+    score_to_level,
+)
+from cache import TTLCache
+from config import settings
+
+log = logging.getLogger("busyness")
+
+live_cache = TTLCache()
+forecast_cache = TTLCache()
+venue_cache = TTLCache()
+
+client: Optional[BestTimeClient] = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global client
+    if settings.besttime_enabled:
+        client = BestTimeClient(
+            private_key=settings.besttime_private_key,
+            public_key=settings.besttime_public_key,
+            base_url=settings.besttime_base_url,
+            timeout=settings.request_timeout,
+        )
+        log.info("BestTime provider enabled")
+    else:
+        log.warning(
+            "BESTTIME_API_KEY_PRIVATE not set — serving simulated data. "
+            "See .env.example."
+        )
+    yield
+    if client is not None:
+        await client.aclose()
+
 
 app = FastAPI(
     title="Restaurant & Cafe Busyness API",
-    version="1.0.0",
-    description="Real-time and predicted busyness for restaurants, cafes, and bars.",
+    version="2.0.0",
+    description="Real-time and forecast busyness for restaurants, cafes, and bars, "
+                "powered by BestTime.app foot-traffic data with crowdsourced check-ins.",
+    lifespan=lifespan,
 )
 
 
-# ---------------------------------------------------------------------------
-# Venue data (in-memory demo dataset)
-# ---------------------------------------------------------------------------
-
-class Category(str, Enum):
-    restaurant = "restaurant"
-    cafe = "cafe"
-    bar = "bar"
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+if os.path.isdir(STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-class Venue(BaseModel):
-    id: str
-    name: str
-    category: Category
-    address: str
-    city: str
-    lat: float
-    lng: float
-    price_level: int  # 1-4, like $-$$$$
-    rating: float
+def _using_besttime() -> bool:
+    return client is not None
 
 
-VENUES: dict[str, Venue] = {}
-
-
-def _seed_venues():
-    demo = [
-        ("The Copper Kettle", Category.cafe, "14 High Street", "London", 51.5074, -0.1278, 2, 4.4),
-        ("Bean & Barrel", Category.cafe, "88 Baker Street", "London", 51.5205, -0.1567, 2, 4.6),
-        ("Trattoria Milano", Category.restaurant, "22 Via Roma", "London", 51.5099, -0.1180, 3, 4.5),
-        ("The Rusty Anchor", Category.bar, "5 Ocean Drive", "London", 51.5033, -0.1195, 2, 4.1),
-        ("Sakura Sushi House", Category.restaurant, "9 Park Avenue", "London", 51.5142, -0.0931, 3, 4.7),
-        ("Corner Espresso", Category.cafe, "3 King's Road", "London", 51.4875, -0.1687, 1, 4.3),
-        ("The Gilded Fork", Category.restaurant, "41 Regent Street", "London", 51.5101, -0.1367, 4, 4.6),
-        ("Blue Moon Tavern", Category.bar, "17 Camden High St", "London", 51.5390, -0.1426, 2, 4.0),
-        ("Morning Glory Cafe", Category.cafe, "60 Portobello Rd", "London", 51.5170, -0.2040, 1, 4.2),
-        ("Spice Route", Category.restaurant, "31 Brick Lane", "London", 51.5225, -0.0715, 2, 4.4),
-    ]
-    for name, cat, addr, city, lat, lng, price, rating in demo:
-        vid = hashlib.sha1(name.encode()).hexdigest()[:10]
-        VENUES[vid] = Venue(
-            id=vid, name=name, category=cat, address=addr, city=city,
-            lat=lat, lng=lng, price_level=price, rating=rating,
-        )
-
-
-_seed_venues()
+def _simulated_allowed() -> bool:
+    return settings.allow_simulated_fallback or not settings.besttime_enabled
 
 
 # ---------------------------------------------------------------------------
-# Busyness prediction
+# Meta
 # ---------------------------------------------------------------------------
 
-# 24-hour baseline curves (0-100), representative shape per category.
-# Index 0 = midnight-1am ... index 23 = 11pm-midnight.
-BASE_CURVES = {
-    Category.cafe: {
-        "weekday": [2, 1, 1, 1, 1, 2, 15, 45, 65, 55, 40, 45, 60, 50, 35, 30, 25, 20, 15, 10, 8, 5, 3, 2],
-        "weekend": [5, 3, 2, 1, 1, 2, 8, 20, 45, 70, 75, 70, 65, 55, 45, 35, 25, 18, 12, 8, 6, 5, 4, 3],
-    },
-    Category.restaurant: {
-        "weekday": [3, 2, 1, 1, 1, 1, 3, 8, 12, 15, 20, 45, 70, 55, 25, 15, 20, 40, 75, 85, 70, 40, 15, 6],
-        "weekend": [8, 5, 3, 2, 1, 1, 2, 5, 10, 20, 35, 55, 80, 75, 45, 25, 30, 50, 80, 90, 85, 65, 35, 15],
-    },
-    Category.bar: {
-        "weekday": [15, 8, 3, 1, 1, 1, 1, 2, 3, 3, 4, 6, 10, 12, 10, 8, 10, 20, 40, 55, 65, 60, 45, 25],
-        "weekend": [40, 25, 12, 5, 2, 1, 1, 1, 2, 3, 4, 6, 12, 15, 12, 10, 15, 30, 55, 75, 90, 95, 85, 60],
-    },
-}
+@app.get("/", include_in_schema=False)
+def home():
+    """Serve the web app, falling back to the API index if it is absent."""
+    page = os.path.join(STATIC_DIR, "index.html")
+    if os.path.isfile(page):
+        return FileResponse(page)
+    return JSONResponse(api_index())
 
 
-def _clamp(v: float, lo: float = 0, hi: float = 100) -> int:
-    return int(round(max(lo, min(hi, v))))
-
-
-def predict_curve(venue: Venue, date) -> list[int]:
-    """Deterministic per-day baseline curve: same venue + same date
-    always produces the same curve, so results are stable within a day
-    but vary day to day without needing external data."""
-    is_weekend = date.weekday() >= 5
-    base = BASE_CURVES[venue.category]["weekend" if is_weekend else "weekday"]
-    rng = random.Random(f"{venue.id}-{date.isoformat()}")
-    return [_clamp(v + rng.randint(-8, 8)) for v in base]
-
-
-class CheckinLevel(str, Enum):
-    quiet = "quiet"          # ~10
-    moderate = "moderate"    # ~40
-    busy = "busy"            # ~70
-    packed = "packed"        # ~95
-
-
-LEVEL_SCORE = {
-    CheckinLevel.quiet: 10,
-    CheckinLevel.moderate: 40,
-    CheckinLevel.busy: 70,
-    CheckinLevel.packed: 95,
-}
-
-CHECKIN_WINDOW = timedelta(hours=2)
-CHECKINS: dict[str, list[tuple[datetime, int]]] = {}  # venue_id -> [(ts, score)]
-
-
-def _recent_checkins(venue_id: str, now: datetime) -> list[int]:
-    entries = CHECKINS.get(venue_id, [])
-    fresh = [(ts, score) for ts, score in entries if now - ts <= CHECKIN_WINDOW]
-    CHECKINS[venue_id] = fresh
-    return [score for _, score in fresh]
-
-
-def current_busyness(venue: Venue, now: datetime) -> dict:
-    curve = predict_curve(venue, now.date())
-    hour = now.hour
-    frac = now.minute / 60
-    next_hour = (hour + 1) % 24
-    baseline = curve[hour] * (1 - frac) + curve[next_hour] * frac
-
-    scores = _recent_checkins(venue.id, now)
-    if scores:
-        live_avg = sum(scores) / len(scores)
-        weight = min(len(scores) / 5, 0.75)  # more reports = more trust, capped
-        value = baseline * (1 - weight) + live_avg * weight
-        source = "live" if weight >= 0.75 else "blended"
-    else:
-        value = baseline
-        source = "predicted"
-
-    score = _clamp(value)
-    return {
-        "busyness_score": score,
-        "level": _score_to_level(score),
-        "source": source,
-        "recent_checkins": len(scores),
-    }
-
-
-def _score_to_level(score: int) -> str:
-    if score < 26:
-        return "not_busy"
-    if score < 51:
-        return "moderate"
-    if score < 76:
-        return "busy"
-    return "very_busy"
-
-
-def _haversine_km(lat1, lng1, lat2, lng2) -> float:
-    r = 6371.0
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lng2 - lng1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlambda / 2) ** 2
-    return 2 * r * math.asin(math.sqrt(a))
-
-
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
-@app.get("/", tags=["meta"])
-def index():
+@app.get("/api", tags=["meta"])
+def api_index():
     return {
         "name": "Restaurant & Cafe Busyness API",
+        "data_source": "besttime" if _using_besttime() else "simulated",
         "endpoints": [
-            "GET /v1/venues",
-            "GET /v1/venues/{venue_id}",
-            "GET /v1/venues/{venue_id}/forecast",
+            "GET  /v1/venues/search",
+            "GET  /v1/venues/{venue_id}",
+            "GET  /v1/venues/{venue_id}/live",
+            "GET  /v1/venues/{venue_id}/forecast",
+            "POST /v1/venues",
             "POST /v1/venues/{venue_id}/checkin",
-            "GET /v1/busy-now",
+            "GET  /v1/busy-now",
         ],
+        "web_app": "/",
         "docs": "/docs",
     }
 
 
 @app.get("/health", tags=["meta"])
-def health():
-    return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
+async def health():
+    """Liveness plus data-source status. Never returns the API key."""
+    source = "besttime" if _using_besttime() else "simulated"
+    result = {
+        "status": "ok",
+        "data_source": source,
+        "simulated_fallback_enabled": settings.allow_simulated_fallback,
+        "time": datetime.now(timezone.utc).isoformat(),
+        "cache": {
+            "live": live_cache.stats(),
+            "forecast": forecast_cache.stats(),
+            "venues": venue_cache.stats(),
+        },
+    }
+
+    if _using_besttime():
+        try:
+            key_info = await client.key_status()
+            # Surface remaining credits without echoing the key itself.
+            result["besttime"] = {
+                "reachable": True,
+                "credits": key_info.get("credits", key_info.get("api_key_credits")),
+            }
+        except BestTimeError as exc:
+            result["besttime"] = {"reachable": False, "error": str(exc)}
+    return result
 
 
-@app.get("/v1/venues", tags=["Venues"])
-def list_venues(
-    category: Optional[Category] = Query(None, description="Filter by venue category"),
-    query: Optional[str] = Query(None, description="Search venue name or address"),
-    city: Optional[str] = Query(None, description="Filter by city"),
-    lat: Optional[float] = Query(None, description="User latitude, for distance sort"),
-    lng: Optional[float] = Query(None, description="User longitude, for distance sort"),
-    sort: str = Query("name", pattern="^(name|busyness|rating|distance)$"),
+# ---------------------------------------------------------------------------
+# Venue search
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/venues/search", tags=["Venues"])
+async def search_venues(
+    q: str = Query("restaurant", description="What to look for, e.g. 'coffee', 'sushi'"),
+    lat: Optional[float] = Query(None, ge=-90, le=90),
+    lng: Optional[float] = Query(None, ge=-180, le=180),
+    radius: int = Query(2000, ge=100, le=50000, description="Search radius in metres"),
+    limit: int = Query(20, ge=1, le=100),
 ):
-    """List venues with current busyness, optionally filtered and sorted."""
+    """Find venues near a location.
+
+    With BestTime configured this runs a radar search (which costs
+    credits and may take a few seconds); otherwise it searches the
+    simulated demo set.
+    """
+    if _using_besttime():
+        if lat is None or lng is None:
+            raise HTTPException(400, "lat and lng are required when using BestTime search")
+
+        cache_key = f"search:{q}:{lat:.4f}:{lng:.4f}:{radius}:{limit}"
+        cached = venue_cache.get(cache_key)
+        if cached is not None:
+            return {"source": "besttime", "cached": True, **cached}
+
+        try:
+            result = await client.search_venues(q, lat, lng, radius=radius, limit=limit)
+        except BestTimeError as exc:
+            return _fallback_or_error(exc, lambda: _simulated_search(q, lat, lng, radius, limit))
+
+        payload = {
+            "count": len(result["venues"]),
+            "job_id": result.get("job_id"),
+            "collection_id": result.get("collection_id"),
+            "results": result["venues"],
+        }
+        # A radar search may still be running; only cache finished results.
+        if result["venues"]:
+            venue_cache.set(cache_key, payload, settings.forecast_cache_ttl)
+        return {"source": "besttime", "cached": False, **payload}
+
+    if not _simulated_allowed():
+        raise HTTPException(503, "No data source available")
+    return {"source": "simulated", "cached": False, **_simulated_search(q, lat, lng, radius, limit)}
+
+
+def _simulated_search(q, lat, lng, radius, limit) -> dict:
+    venues = simulated.search(q, lat, lng, radius)[:limit]
     now = datetime.now(timezone.utc)
-    results = list(VENUES.values())
+    results = []
+    for v in venues:
+        baseline = simulated.current_baseline(v, now)
+        results.append({
+            **_public_venue(v),
+            "busyness": blend(baseline, v["venue_id"], now, "predicted"),
+            "distance_km": (round(haversine_km(lat, lng, v["lat"], v["lng"]), 2)
+                            if lat is not None and lng is not None else None),
+        })
+    return {"count": len(results), "results": results}
 
-    if category:
-        results = [v for v in results if v.category == category]
-    if city:
-        results = [v for v in results if v.city.lower() == city.lower()]
-    if query:
-        q = query.lower()
-        results = [v for v in results if q in v.name.lower() or q in v.address.lower()]
 
-    enriched = []
-    for v in results:
-        busyness = current_busyness(v, now)
-        distance_km = _haversine_km(lat, lng, v.lat, v.lng) if lat is not None and lng is not None else None
-        enriched.append({**v.model_dump(), "busyness": busyness, "distance_km": round(distance_km, 2) if distance_km is not None else None})
+@app.get("/v1/venues/search/progress", tags=["Venues"])
+async def search_progress(
+    job_id: str = Query(..., description="job_id returned by /v1/venues/search"),
+    collection_id: Optional[str] = Query(None),
+):
+    """Poll a BestTime radar search that was still running."""
+    if not _using_besttime():
+        raise HTTPException(400, "Search jobs only exist when BestTime is configured")
+    try:
+        return await client.search_progress(job_id, collection_id)
+    except BestTimeError as exc:
+        raise HTTPException(502, f"BestTime error: {exc}")
 
-    if sort == "busyness":
-        enriched.sort(key=lambda x: x["busyness"]["busyness_score"], reverse=True)
-    elif sort == "rating":
-        enriched.sort(key=lambda x: x["rating"], reverse=True)
-    elif sort == "distance" and lat is not None and lng is not None:
-        enriched.sort(key=lambda x: x["distance_km"])
-    else:
-        enriched.sort(key=lambda x: x["name"])
 
-    return {"count": len(enriched), "results": enriched}
+# ---------------------------------------------------------------------------
+# Adding a venue
+# ---------------------------------------------------------------------------
 
+class AddVenueRequest(BaseModel):
+    venue_name: str = Field(..., min_length=1, max_length=200)
+    venue_address: str = Field(..., min_length=1, max_length=300)
+
+
+@app.post("/v1/venues", tags=["Venues"], status_code=201)
+async def add_venue(req: AddVenueRequest):
+    """Add a venue by name and address, generating its forecast.
+
+    This costs BestTime credits, so the result is cached.
+    """
+    if not _using_besttime():
+        raise HTTPException(400, "Adding venues requires BestTime to be configured")
+
+    try:
+        result = await client.create_forecast(
+            req.venue_name, req.venue_address, settings.collection_id
+        )
+    except BestTimeError as exc:
+        raise HTTPException(502, f"BestTime error: {exc}")
+
+    venue = result["venue"]
+    if venue.get("venue_id"):
+        forecast_cache.set(f"week:{venue['venue_id']}", result["week"],
+                           settings.forecast_cache_ttl)
+    return {"venue": venue, "days_forecast": len(result["week"])}
+
+
+# ---------------------------------------------------------------------------
+# Venue detail + live busyness
+# ---------------------------------------------------------------------------
 
 @app.get("/v1/venues/{venue_id}", tags=["Venues"])
-def get_venue(venue_id: str):
-    """Get full details for a venue, including current busyness."""
-    venue = VENUES.get(venue_id)
-    if not venue:
-        raise HTTPException(404, "Venue not found")
-    now = datetime.now(timezone.utc)
-    return {**venue.model_dump(), "busyness": current_busyness(venue, now)}
+async def get_venue(venue_id: str):
+    """Venue details with its current busyness."""
+    if venue_id.startswith("sim_") or not _using_besttime():
+        venue = simulated.DEMO_VENUES.get(venue_id)
+        if not venue:
+            raise HTTPException(404, "Venue not found")
+        now = datetime.now(timezone.utc)
+        baseline = simulated.current_baseline(venue, now)
+        return {
+            **_public_venue(venue),
+            "busyness": blend(baseline, venue_id, now, "predicted"),
+            "source": "simulated",
+        }
 
+    live = await _live_busyness(venue_id)
+    return {
+        "venue_id": venue_id,
+        "name": live.get("venue_name"),
+        "timezone": live.get("timezone"),
+        "local_time": live.get("local_time"),
+        "busyness": live["busyness"],
+        "source": "besttime",
+    }
+
+
+@app.get("/v1/venues/{venue_id}/live", tags=["Venues"])
+async def get_live(venue_id: str):
+    """Live busyness for a venue, blended with recent check-ins.
+
+    `live_available` reports whether BestTime has real-time coverage for
+    this venue; when it is false the score falls back to the forecast
+    and any check-ins carry proportionally more weight.
+    """
+    if venue_id.startswith("sim_") or not _using_besttime():
+        venue = simulated.DEMO_VENUES.get(venue_id)
+        if not venue:
+            raise HTTPException(404, "Venue not found")
+        now = datetime.now(timezone.utc)
+        baseline = simulated.current_baseline(venue, now)
+        return {
+            "venue_id": venue_id,
+            "busyness": blend(baseline, venue_id, now, "predicted"),
+            "live_available": False,
+            "source": "simulated",
+        }
+
+    return await _live_busyness(venue_id)
+
+
+async def _live_busyness(venue_id: str) -> dict:
+    """Fetch (cached) live data for a venue and blend in check-ins."""
+    cache_key = f"live:{venue_id}"
+    data = live_cache.get(cache_key)
+    cached = data is not None
+
+    if data is None:
+        try:
+            data = await client.live_busyness(venue_id=venue_id)
+        except BestTimeError as exc:
+            if exc.status_code == 404:
+                raise HTTPException(404, "Venue not found in BestTime")
+            if _simulated_allowed():
+                log.warning("BestTime live lookup failed for %s: %s", venue_id, exc)
+                raise HTTPException(502, f"BestTime unavailable: {exc}")
+            raise HTTPException(502, f"BestTime error: {exc}")
+        live_cache.set(cache_key, data, settings.live_cache_ttl)
+
+    # Prefer real live data; fall back to the forecast for this moment.
+    if data.get("live_available") and data.get("live_busyness") is not None:
+        baseline, baseline_source = data["live_busyness"], "live"
+    else:
+        baseline, baseline_source = data.get("forecasted_busyness"), "forecast"
+
+    return {
+        "venue_id": venue_id,
+        "venue_name": data.get("venue_name"),
+        "timezone": data.get("timezone"),
+        "local_time": data.get("local_time"),
+        "busyness": blend(baseline, venue_id, None, baseline_source),
+        "live_available": bool(data.get("live_available")),
+        "forecasted_busyness": data.get("forecasted_busyness"),
+        "live_vs_forecast_delta": data.get("delta"),
+        "cached": cached,
+        "source": "besttime",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Forecast
+# ---------------------------------------------------------------------------
 
 @app.get("/v1/venues/{venue_id}/forecast", tags=["Venues"])
-def get_forecast(
+async def get_forecast(
     venue_id: str,
-    date: Optional[str] = Query(None, description="YYYY-MM-DD, defaults to today"),
+    day: Optional[int] = Query(None, ge=0, le=6,
+                               description="0=Monday ... 6=Sunday. Omit for the full week."),
 ):
-    """24-hour predicted busyness curve for a venue on a given date."""
-    venue = VENUES.get(venue_id)
-    if not venue:
-        raise HTTPException(404, "Venue not found")
+    """Hour-by-hour busyness forecast for a venue."""
+    if venue_id.startswith("sim_") or not _using_besttime():
+        venue = simulated.DEMO_VENUES.get(venue_id)
+        if not venue:
+            raise HTTPException(404, "Venue not found")
+        week = simulated.week_forecast(venue, date.today())
+        days = [d for d in week if d["day_int"] == day] if day is not None else week
+        return {"venue_id": venue_id, "source": "simulated", "days": _decorate(days)}
 
-    now = datetime.now(timezone.utc)
-    target_date = now.date()
-    if date:
+    cache_key = f"week:{venue_id}"
+    week = forecast_cache.get(cache_key)
+    cached = week is not None
+
+    if week is None:
         try:
-            target_date = datetime.strptime(date, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(400, "date must be in YYYY-MM-DD format")
+            result = await client.week_forecast(venue_id)
+        except BestTimeError as exc:
+            if exc.status_code == 404:
+                raise HTTPException(404, "Venue not found in BestTime")
+            raise HTTPException(502, f"BestTime error: {exc}")
+        week = result["week"]
+        forecast_cache.set(cache_key, week, settings.forecast_cache_ttl)
 
-    curve = predict_curve(venue, target_date)
-    return {
-        "venue_id": venue_id,
-        "date": target_date.isoformat(),
-        "is_weekend": target_date.weekday() >= 5,
-        "hourly_busyness": [
-            {"hour": h, "busyness_score": score, "level": _score_to_level(score)}
-            for h, score in enumerate(curve)
-        ],
-        "current": current_busyness(venue, now) if target_date == now.date() else None,
-    }
+    days = [d for d in week if d.get("day_int") == day] if day is not None else week
+    if day is not None and not days:
+        raise HTTPException(404, f"No forecast available for day {day}")
 
+    return {"venue_id": venue_id, "source": "besttime", "cached": cached,
+            "days": _decorate(days)}
+
+
+def _decorate(days: list[dict]) -> list[dict]:
+    """Attach a human-readable level to each hour of each day."""
+    out = []
+    for d in days:
+        hours = [
+            {"hour": h, "busyness_score": score, "level": score_to_level(score)}
+            for h, score in enumerate(d.get("hourly_busyness") or [])
+        ]
+        out.append({**d, "hours": hours})
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Check-ins
+# ---------------------------------------------------------------------------
 
 class CheckinRequest(BaseModel):
-    level: CheckinLevel = Field(..., description="How busy it looks right now")
+    level: CheckinLevel = Field(..., description="How busy the venue looks right now")
 
 
-@app.post("/v1/venues/{venue_id}/checkin", tags=["Venues"])
-def submit_checkin(venue_id: str, req: CheckinRequest):
-    """Report live busyness for a venue. Recent check-ins are blended
-    into the venue's real-time busyness estimate (weighted by volume,
-    decayed out of the estimate after 2 hours)."""
-    venue = VENUES.get(venue_id)
-    if not venue:
+@app.post("/v1/venues/{venue_id}/checkin", tags=["Check-ins"])
+async def submit_checkin(venue_id: str, req: CheckinRequest):
+    """Report how busy a venue is right now.
+
+    Reports decay over two hours and are blended into the venue's
+    busyness score, weighted by how many and how recent they are.
+    """
+    if venue_id.startswith("sim_") and venue_id not in simulated.DEMO_VENUES:
         raise HTTPException(404, "Venue not found")
 
     now = datetime.now(timezone.utc)
-    score = LEVEL_SCORE[req.level]
-    CHECKINS.setdefault(venue_id, []).append((now, score))
+    checkins.add(venue_id, req.level, now)
 
+    if venue_id.startswith("sim_") or not _using_besttime():
+        venue = simulated.DEMO_VENUES.get(venue_id)
+        baseline = simulated.current_baseline(venue, now) if venue else None
+        busyness = blend(baseline, venue_id, now, "predicted")
+    else:
+        # Reflect the new check-in immediately rather than serving a stale blend.
+        try:
+            live = await _live_busyness(venue_id)
+            busyness = live["busyness"]
+        except HTTPException:
+            busyness = blend(None, venue_id, now)
+
+    return {"venue_id": venue_id, "accepted_level": req.level, "busyness": busyness}
+
+
+# ---------------------------------------------------------------------------
+# Busiest right now
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/busy-now", tags=["Venues"])
+async def busy_now(
+    min_score: int = Query(0, ge=0, le=100),
+    limit: int = Query(10, ge=1, le=100),
+    collection_id: Optional[str] = Query(None),
+):
+    """Venues that are busiest at this moment, most crowded first."""
+    if _using_besttime():
+        try:
+            venues = await client.filter_venues(
+                collection_id=collection_id or settings.collection_id,
+                busy_min=min_score or None,
+                now=True,
+                live=True,
+                limit=limit,
+            )
+        except BestTimeError as exc:
+            return _fallback_or_error(exc, lambda: _simulated_busy_now(min_score, limit))
+
+        results = []
+        for v in venues:
+            baseline = v.get("live_busyness")
+            source = "live"
+            if baseline is None:
+                baseline, source = v.get("forecasted_busyness"), "forecast"
+            results.append({
+                **v,
+                "busyness": blend(baseline, v.get("venue_id") or "", None, source),
+            })
+        results = [r for r in results
+                   if (r["busyness"]["busyness_score"] or 0) >= min_score]
+        results.sort(key=lambda x: x["busyness"]["busyness_score"] or 0, reverse=True)
+        return {"source": "besttime", "count": len(results), "results": results[:limit]}
+
+    if not _simulated_allowed():
+        raise HTTPException(503, "No data source available")
+    return {"source": "simulated", **_simulated_busy_now(min_score, limit)}
+
+
+def _simulated_busy_now(min_score: int, limit: int) -> dict:
+    now = datetime.now(timezone.utc)
+    results = []
+    for v in simulated.DEMO_VENUES.values():
+        baseline = simulated.current_baseline(v, now)
+        busyness = blend(baseline, v["venue_id"], now, "predicted")
+        if busyness["busyness_score"] >= min_score:
+            results.append({**_public_venue(v), "busyness": busyness})
+    results.sort(key=lambda x: x["busyness"]["busyness_score"], reverse=True)
+    return {"count": len(results[:limit]), "results": results[:limit]}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _public_venue(v: dict) -> dict:
+    """Venue fields safe to expose to clients."""
     return {
-        "venue_id": venue_id,
-        "accepted_level": req.level,
-        "busyness": current_busyness(venue, now),
+        "venue_id": v["venue_id"],
+        "name": v["name"],
+        "address": v.get("address"),
+        "lat": v.get("lat"),
+        "lng": v.get("lng"),
+        "timezone": v.get("timezone"),
+        "venue_type": v.get("venue_type"),
+        "price_level": v.get("price_level"),
+        "rating": v.get("rating"),
     }
 
 
-@app.get("/v1/busy-now", tags=["Venues"])
-def busy_now(
-    category: Optional[Category] = Query(None),
-    min_score: int = Query(0, ge=0, le=100, description="Only include venues at or above this busyness score"),
-    limit: int = Query(10, ge=1, le=100),
-):
-    """Currently busiest venues, most crowded first."""
-    now = datetime.now(timezone.utc)
-    results = list(VENUES.values())
-    if category:
-        results = [v for v in results if v.category == category]
+def _fallback_or_error(exc: BestTimeError, fallback):
+    """Degrade to simulated data on a BestTime outage, if allowed."""
+    if settings.allow_simulated_fallback:
+        log.warning("BestTime unavailable, falling back to simulated data: %s", exc)
+        return {"source": "simulated_fallback", "besttime_error": str(exc), **fallback()}
+    raise HTTPException(502, f"BestTime error: {exc}")
 
-    enriched = [{**v.model_dump(), "busyness": current_busyness(v, now)} for v in results]
-    enriched = [v for v in enriched if v["busyness"]["busyness_score"] >= min_score]
-    enriched.sort(key=lambda x: x["busyness"]["busyness_score"], reverse=True)
-
-    return {"count": len(enriched[:limit]), "results": enriched[:limit]}
-
-
-# ---------------------------------------------------------------------------
-# Error handler — clean JSON errors
-# ---------------------------------------------------------------------------
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc: HTTPException):

@@ -1,50 +1,145 @@
-# Restaurant & Cafe Busyness API
+# Busy or Not — restaurant & cafe busyness
 
-Tells you how busy restaurants, cafes, and bars are right now, plus a
-predicted busyness curve for the rest of the day — similar in spirit to
-Google's "Popular Times".
+Shows how busy restaurants, cafes, and bars are right now, plus an
+hour-by-hour forecast for the week. Backed by
+[BestTime.app](https://besttime.app) foot-traffic data, with
+crowdsourced check-ins layered on top.
 
-No external API keys required. Busyness is generated from realistic
-per-category, time-of-day/day-of-week curves (deterministic per venue
-per day), then blended with live crowdsourced check-ins when people
-report how busy a place looks.
+A FastAPI backend serves both the JSON API and a dependency-free web app
+from a single process.
 
-## Run locally
+## Quick start
 
 ```bash
 cd restaurant-busyness
 pip install -r requirements.txt
+
+cp .env.example .env       # add your BestTime keys (optional)
 uvicorn main:app --reload
 ```
 
-Open `http://localhost:8000/docs` for interactive API docs.
+- Web app: <http://localhost:8000/>
+- API docs: <http://localhost:8000/docs>
+
+**It runs with no API key.** Without `BESTTIME_API_KEY_PRIVATE` the app
+serves realistic simulated data over ten demo venues, so you can develop
+and demo the whole thing offline. The header badge always shows which
+source is live.
+
+## Configuration
+
+Set in `.env` (see `.env.example`):
+
+| Variable | Purpose |
+|---|---|
+| `BESTTIME_API_KEY_PRIVATE` | **Required for real data.** Server-side only. |
+| `BESTTIME_API_KEY_PUBLIC` | Used for read-only forecast endpoints. |
+| `BESTTIME_COLLECTION_ID` | Restrict queries to one BestTime collection. |
+| `LIVE_CACHE_TTL` | Seconds to cache live busyness (default 300). |
+| `FORECAST_CACHE_TTL` | Seconds to cache weekly forecasts (default 86400). |
+| `ALLOW_SIMULATED_FALLBACK` | Serve simulated data if BestTime is down (default true). |
+
+> **Keep the private key private.** It is read from the environment,
+> used only server-side, and never returned in a response — that is why
+> the browser talks to this API rather than to BestTime directly.
+> `.env` is gitignored.
+
+BestTime bills per request, so every outbound call is cached
+(`LIVE_CACHE_TTL` / `FORECAST_CACHE_TTL`). Raise the TTLs to cut cost,
+lower them for fresher data. `GET /health` reports cache hit rates and
+your remaining credits.
 
 ## Endpoints
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/v1/venues` | List venues, filter by `category`/`city`/`query`, sort by `name`\|`busyness`\|`rating`\|`distance` |
-| GET | `/v1/venues/{venue_id}` | Venue details + current busyness |
-| GET | `/v1/venues/{venue_id}/forecast` | 24-hour predicted busyness curve for a date (defaults to today) |
-| POST | `/v1/venues/{venue_id}/checkin` | Report live busyness (`quiet`\|`moderate`\|`busy`\|`packed`) |
-| GET | `/v1/busy-now` | Currently busiest venues, sorted descending |
-
-## Example
+| GET | `/v1/venues/search` | Find venues near `lat`/`lng` matching `q` |
+| GET | `/v1/venues/search/progress` | Poll a still-running BestTime radar search |
+| POST | `/v1/venues` | Add a venue by name + address (creates its forecast) |
+| GET | `/v1/venues/{id}` | Venue details with current busyness |
+| GET | `/v1/venues/{id}/live` | Live busyness, blended with check-ins |
+| GET | `/v1/venues/{id}/forecast` | Hourly forecast; `?day=0..6` for one day |
+| POST | `/v1/venues/{id}/checkin` | Report busyness now (`quiet`/`moderate`/`busy`/`packed`) |
+| GET | `/v1/busy-now` | Busiest venues right now |
+| GET | `/health` | Status, active data source, cache stats, credits |
 
 ```bash
-curl "http://localhost:8000/v1/busy-now?category=cafe&limit=5"
-
-curl -X POST "http://localhost:8000/v1/venues/<venue_id>/checkin" \
-  -H "Content-Type: application/json" \
-  -d '{"level": "busy"}'
+curl "http://localhost:8000/v1/venues/search?q=coffee&lat=51.5074&lng=-0.1278"
+curl "http://localhost:8000/v1/busy-now?min_score=60"
+curl -X POST "http://localhost:8000/v1/venues/<id>/checkin" \
+     -H "Content-Type: application/json" -d '{"level":"busy"}'
 ```
 
-## Notes on data
+## How the busyness score works
 
-- `VENUES` and `CHECKINS` are in-memory (10 demo venues seeded on
-  startup) — swap in a real database for production.
-- `predict_curve()` isolates the busyness-prediction logic so it can
-  later be replaced with real historical data (e.g. from a Google
-  Places-style source) without changing any endpoint.
-- Check-ins older than 2 hours automatically age out of the live
-  estimate.
+Every score is 0–100, mapped to `not_busy` (<26), `moderate` (<51),
+`busy` (<76), `very_busy` (76+). The `source` field on each response
+says where the number came from.
+
+1. **Baseline** — BestTime's live foot traffic when available, otherwise
+   its forecast for the current hour. BestTime does not have real-time
+   coverage for every venue; `live_available` tells you which you got.
+2. **Check-ins** — user reports are weighted by how many there are and
+   how recent, decaying to zero over two hours and capped at 75%
+   influence so they can nudge but never fully override real data.
+3. **Blend** — the two are combined. Check-ins matter most exactly where
+   BestTime has no live coverage, and with no baseline at all they
+   stand alone.
+
+## Verifying the BestTime integration
+
+The client parses BestTime responses defensively, but field names can
+drift. Run this against a live key to confirm every endpoint still
+matches:
+
+```bash
+export BESTTIME_API_KEY_PRIVATE=pri_...
+python scripts/verify_besttime.py                       # free: key status only
+python scripts/verify_besttime.py \
+    --venue-name "Starbucks" --venue-address "Seattle"  # uses credits
+python scripts/verify_besttime.py --search              # uses credits
+```
+
+It reports PASS/WARN/FAIL per endpoint and flags any expected field that
+came back missing — including whether hourly data is indexed from
+midnight, which the app assumes.
+
+## Tests
+
+```bash
+pip install pytest
+python -m pytest tests/ -q
+```
+
+42 tests, all against the simulated provider — no key or network needed.
+BestTime response parsing is covered by feeding known payload shapes
+through the client's parsers.
+
+## Architecture
+
+```
+main.py         FastAPI routes; picks BestTime or simulated per request
+besttime.py     BestTime API client + response normalization
+simulated.py    Fallback engine: per-category curves, demo venues
+busyness.py     Levels, check-in store, decay + blending
+cache.py        TTL cache (swap for Redis if running multiple workers)
+config.py       Environment-based settings
+static/         Web app (vanilla JS, no build step)
+scripts/        Live API verification
+```
+
+Routes never touch BestTime's payload shape directly — `besttime.py`
+normalizes everything first, so swapping in another data provider means
+writing one new module, not editing endpoints.
+
+## Deploying
+
+Works on Railway, Render, or Fly.io as-is:
+
+- Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+- Set `BESTTIME_API_KEY_PRIVATE` as a secret environment variable —
+  never commit it.
+
+The in-memory venue store and check-in store reset on restart and are
+per-process. Move both to a database (and the cache to Redis) before
+running more than one worker.
