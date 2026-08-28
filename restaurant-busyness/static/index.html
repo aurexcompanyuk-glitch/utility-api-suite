@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Busy or Not — is it busy right now?</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%234ade80'/></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -55,6 +56,10 @@
       <button class="chip" data-filter="quiet">Quiet now</button>
       <button class="chip" data-filter="busy">Busy now</button>
     </div>
+    <div class="viewtoggle" id="viewtoggle" role="group" aria-label="View as list or map">
+      <button data-view="list" aria-pressed="true">List</button>
+      <button data-view="map" aria-pressed="false">Map</button>
+    </div>
     <label class="sort">
       Sort
       <select id="sort">
@@ -70,6 +75,16 @@
 
   <p class="status" id="status" role="status" aria-live="polite"></p>
   <section class="grid" id="results"></section>
+  <section id="mapview" hidden>
+    <div id="map" aria-label="Map of search results"></div>
+    <p class="maplegend">
+      <span><i class="sw q"></i>Not busy</span>
+      <span><i class="sw m"></i>Moderate</span>
+      <span><i class="sw b"></i>Busy</span>
+      <span><i class="sw v"></i>Very busy</span>
+      <span class="attrib">Map data © OpenStreetMap contributors</span>
+    </p>
+  </section>
 </main>
 
 <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
@@ -78,6 +93,7 @@
   <div id="drawer-body"></div>
 </aside>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

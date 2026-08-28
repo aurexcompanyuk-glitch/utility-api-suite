@@ -8,6 +8,7 @@ const state = {
   venues: [],
   filter: "all",
   sort: "relevance",
+  view: "list",
   origin: null,        // {lat, lng} of the resolved place, when there is one
   lastQuery: "",
   drawerVenue: null,
@@ -134,6 +135,8 @@ function renderResults() {
         </div>
       </article>`;
   }).join("");
+
+  if (state.view === "map") renderMap();
 
   grid.querySelectorAll(".card").forEach((card) => {
     const open = () => openDrawer(list[Number(card.dataset.index)]);
@@ -340,6 +343,90 @@ async function submitCheckin(venue, level) {
   }
 }
 
+/* ---------- map ----------
+   Leaflet + OpenStreetMap tiles: free, no API key, no billing account.
+   BestTime supplies each venue's coordinates; this only draws them. */
+
+let map = null;
+let markerLayer = null;
+
+function mapAvailable() {
+  return typeof window.L !== "undefined";
+}
+
+function initMap() {
+  if (map || !mapAvailable()) return;
+  map = L.map("map", { scrollWheelZoom: false }).setView([51.5074, -0.1278], 12);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  }).addTo(map);
+  markerLayer = L.layerGroup().addTo(map);
+}
+
+// Colour each pin by how busy the venue is, so the map reads at a glance.
+function pinIcon(cls) {
+  return L.divIcon({
+    className: "pin-wrap",
+    html: `<span class="pin pin-${cls}"></span>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+  });
+}
+
+function renderMap() {
+  const holder = $("#mapview");
+  if (!mapAvailable()) {
+    holder.innerHTML =
+      `<p class="empty">The map library could not load, so the map is unavailable.
+        The list view has the same venues.</p>`;
+    return;
+  }
+
+  initMap();
+  markerLayer.clearLayers();
+
+  const located = visibleVenues().filter(
+    (v) => typeof v.lat === "number" && typeof v.lng === "number");
+
+  if (!located.length) {
+    setStatus("These results have no coordinates, so nothing can be mapped.");
+    return;
+  }
+
+  located.forEach((v) => {
+    const b = v.busyness || {};
+    const marker = L.marker([v.lat, v.lng], { icon: pinIcon(levelClass(b)) })
+      .addTo(markerLayer)
+      .bindPopup(`
+        <strong>${escapeHtml(v.name || "Venue")}</strong><br>
+        <span class="pop-level ${levelClass(b)}">${levelText(b)}${
+          b.busyness_score != null ? ` · ${b.busyness_score}/100` : ""
+        }</span><br>
+        <button class="pop-btn" data-venue="${escapeHtml(v.venue_id || "")}">Details</button>
+      `);
+    marker.on("popupopen", (e) => {
+      const btn = e.popup.getElement().querySelector(".pop-btn");
+      if (btn) btn.addEventListener("click", () => openDrawer(v));
+    });
+  });
+
+  map.fitBounds(L.latLngBounds(located.map((v) => [v.lat, v.lng])), {
+    padding: [40, 40], maxZoom: 15,
+  });
+  // The container was hidden while sizing, so Leaflet needs a nudge.
+  setTimeout(() => map.invalidateSize(), 60);
+}
+
+function setView(view) {
+  state.view = view;
+  $("#results").hidden = view !== "list";
+  $("#mapview").hidden = view !== "map";
+  document.querySelectorAll("#viewtoggle button").forEach((b) =>
+    b.setAttribute("aria-pressed", String(b.dataset.view === view)));
+  if (view === "map") renderMap();
+}
+
 function closeDrawer() {
   $("#drawer").hidden = true;
   $("#drawer-backdrop").hidden = true;
@@ -369,6 +456,11 @@ $("#filters").addEventListener("click", (e) => {
 });
 
 $("#sort").addEventListener("change", (e) => { state.sort = e.target.value; renderResults(); });
+
+$("#viewtoggle").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-view]");
+  if (btn) setView(btn.dataset.view);
+});
 
 $("#geo-btn").addEventListener("click", () => {
   if (!navigator.geolocation) { setStatus("Geolocation is not supported here.", true); return; }
