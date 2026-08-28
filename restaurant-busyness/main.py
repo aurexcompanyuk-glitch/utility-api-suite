@@ -32,10 +32,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import geocoding
+import osm
+import rhythms
 import simulated
 from besttime import BestTimeClient, BestTimeError
 from busyness import (
     CheckinLevel,
+    Confidence,
     blend,
     checkins,
     haversine_km,
@@ -51,6 +54,7 @@ forecast_cache = TTLCache()
 venue_cache = TTLCache()
 
 client: Optional[BestTimeClient] = None
+osm_client = osm.OverpassClient()
 
 
 @asynccontextmanager
@@ -267,7 +271,7 @@ def _simulated_unified_search(term, location, radius, limit, interpretation) -> 
         baseline = simulated.current_baseline(v, now)
         results.append({
             **_public_venue(v),
-            "busyness": blend(baseline, v["venue_id"], now, "predicted"),
+            "busyness": blend(baseline, v["venue_id"], now, "predicted", Confidence.estimated),
             "distance_km": (round(haversine_km(lat, lng, v["lat"], v["lng"]), 2)
                             if lat is not None else None),
         })
@@ -309,7 +313,9 @@ async def _besttime_search(term, location, radius, limit, interpretation) -> dic
                     "name": live.get("venue_name") or term,
                     "address": address or None,
                     "timezone": live.get("timezone"),
-                    "busyness": blend(baseline, live["venue_id"], None, source),
+                    "busyness": blend(baseline, live["venue_id"], None, source,
+                                      Confidence.measured if live.get("live_available")
+                                      else Confidence.forecast),
                     "live_available": bool(live.get("live_available")),
                     "distance_km": None,
                 }],
@@ -339,12 +345,13 @@ async def _besttime_search(term, location, radius, limit, interpretation) -> dic
     results = []
     for v in result["venues"]:
         baseline = v.get("live_busyness")
-        source = "live"
+        source, conf = "live", Confidence.measured
         if baseline is None:
-            baseline, source = v.get("forecasted_busyness"), "forecast"
+            baseline = v.get("forecasted_busyness")
+            source, conf = "forecast", Confidence.forecast
         results.append({
             **v,
-            "busyness": blend(baseline, v.get("venue_id") or "", None, source),
+            "busyness": blend(baseline, v.get("venue_id") or "", None, source, conf),
             "distance_km": (round(haversine_km(location["lat"], location["lng"],
                                                v["lat"], v["lng"]), 2)
                             if v.get("lat") is not None and v.get("lng") is not None
@@ -354,6 +361,79 @@ async def _besttime_search(term, location, radius, limit, interpretation) -> dic
     return {"source": "besttime", "interpretation": interpretation,
             "job_id": result.get("job_id"), "collection_id": result.get("collection_id"),
             "count": len(results), "results": results}
+
+
+@app.get("/v1/coverage", tags=["Search"])
+async def coverage(
+    place: str = Query(..., description="Place to survey, e.g. 'Manchester'"),
+    radius: int = Query(1500, ge=100, le=10000),
+    kind: Optional[str] = Query(None, description="Limit to one kind, e.g. 'restaurant'"),
+    limit: int = Query(200, ge=1, le=400),
+):
+    """How many real venues exist here, and how many BestTime can score.
+
+    Answers the question directly: OpenStreetMap supplies the complete
+    venue list (every mapped place), and this reports what share of it
+    BestTime actually has data for. Expect the covered share to be well
+    under 100% — no provider measures every venue on earth.
+    """
+    location = await geocoding.geocode(place)
+    if location is None:
+        raise HTTPException(404, f"Could not find a place called '{place}'")
+
+    try:
+        venues = await osm_client.find(
+            location["lat"], location["lng"], radius,
+            [kind] if kind else None, limit,
+        )
+    except osm.OverpassError as exc:
+        raise HTTPException(502, f"OpenStreetMap lookup failed: {exc}")
+
+    by_kind: dict[str, int] = {}
+    for v in venues:
+        by_kind[v["kind"]] = by_kind.get(v["kind"], 0) + 1
+
+    result = {
+        "place": location["name"],
+        "radius_m": radius,
+        "total_venues": len(venues),
+        "by_kind": dict(sorted(by_kind.items(), key=lambda kv: -kv[1])),
+        "venue_source": "openstreetmap",
+        "besttime_configured": _using_besttime(),
+    }
+
+    if not _using_besttime():
+        result["note"] = (
+            "BestTime is not configured, so no venue here has measured busyness. "
+            "Every score would be estimated from typical hours for its kind."
+        )
+        return result
+
+    # Sample rather than querying every venue: each lookup costs a credit.
+    sample = venues[:min(len(venues), 12)]
+    measured = forecast_only = missing = 0
+    for v in sample:
+        try:
+            live = await client.live_busyness(
+                venue_name=v["name"], venue_address=v.get("address") or location["name"])
+        except (BestTimeError, ValueError):
+            missing += 1
+            continue
+        if live.get("live_available"):
+            measured += 1
+        elif live.get("forecasted_busyness") is not None:
+            forecast_only += 1
+        else:
+            missing += 1
+
+    result["besttime_sample"] = {
+        "sampled": len(sample),
+        "live_busyness": measured,
+        "forecast_only": forecast_only,
+        "no_data": missing,
+        "note": "A sample, not the full set — each lookup costs a BestTime credit.",
+    }
+    return result
 
 
 @app.get("/v1/geocode", tags=["Search"])
@@ -417,7 +497,7 @@ def _simulated_search(q, lat, lng, radius, limit) -> dict:
         baseline = simulated.current_baseline(v, now)
         results.append({
             **_public_venue(v),
-            "busyness": blend(baseline, v["venue_id"], now, "predicted"),
+            "busyness": blend(baseline, v["venue_id"], now, "predicted", Confidence.estimated),
             "distance_km": (round(haversine_km(lat, lng, v["lat"], v["lng"]), 2)
                             if lat is not None and lng is not None else None),
         })
@@ -485,7 +565,7 @@ async def get_venue(venue_id: str):
         baseline = simulated.current_baseline(venue, now)
         return {
             **_public_venue(venue),
-            "busyness": blend(baseline, venue_id, now, "predicted"),
+            "busyness": blend(baseline, venue_id, now, "predicted", Confidence.estimated),
             "source": "simulated",
         }
 
@@ -516,7 +596,7 @@ async def get_live(venue_id: str):
         baseline = simulated.current_baseline(venue, now)
         return {
             "venue_id": venue_id,
-            "busyness": blend(baseline, venue_id, now, "predicted"),
+            "busyness": blend(baseline, venue_id, now, "predicted", Confidence.estimated),
             "live_available": False,
             "source": "simulated",
         }
@@ -545,15 +625,17 @@ async def _live_busyness(venue_id: str) -> dict:
     # Prefer real live data; fall back to the forecast for this moment.
     if data.get("live_available") and data.get("live_busyness") is not None:
         baseline, baseline_source = data["live_busyness"], "live"
+        confidence = Confidence.measured
     else:
         baseline, baseline_source = data.get("forecasted_busyness"), "forecast"
+        confidence = Confidence.forecast
 
     return {
         "venue_id": venue_id,
         "venue_name": data.get("venue_name"),
         "timezone": data.get("timezone"),
         "local_time": data.get("local_time"),
-        "busyness": blend(baseline, venue_id, None, baseline_source),
+        "busyness": blend(baseline, venue_id, None, baseline_source, confidence),
         "live_available": bool(data.get("live_available")),
         "forecasted_busyness": data.get("forecasted_busyness"),
         "live_vs_forecast_delta": data.get("delta"),
@@ -639,7 +721,7 @@ async def submit_checkin(venue_id: str, req: CheckinRequest):
     if venue_id.startswith("sim_") or not _using_besttime():
         venue = simulated.DEMO_VENUES.get(venue_id)
         baseline = simulated.current_baseline(venue, now) if venue else None
-        busyness = blend(baseline, venue_id, now, "predicted")
+        busyness = blend(baseline, venue_id, now, "predicted", Confidence.estimated)
     else:
         # Reflect the new check-in immediately rather than serving a stale blend.
         try:
@@ -677,12 +759,13 @@ async def busy_now(
         results = []
         for v in venues:
             baseline = v.get("live_busyness")
-            source = "live"
+            source, conf = "live", Confidence.measured
             if baseline is None:
-                baseline, source = v.get("forecasted_busyness"), "forecast"
+                baseline = v.get("forecasted_busyness")
+                source, conf = "forecast", Confidence.forecast
             results.append({
                 **v,
-                "busyness": blend(baseline, v.get("venue_id") or "", None, source),
+                "busyness": blend(baseline, v.get("venue_id") or "", None, source, conf),
             })
         results = [r for r in results
                    if (r["busyness"]["busyness_score"] or 0) >= min_score]
@@ -699,7 +782,7 @@ def _simulated_busy_now(min_score: int, limit: int) -> dict:
     results = []
     for v in simulated.DEMO_VENUES.values():
         baseline = simulated.current_baseline(v, now)
-        busyness = blend(baseline, v["venue_id"], now, "predicted")
+        busyness = blend(baseline, v["venue_id"], now, "predicted", Confidence.estimated)
         if busyness["busyness_score"] >= min_score:
             results.append({**_public_venue(v), "busyness": busyness})
     results.sort(key=lambda x: x["busyness"]["busyness_score"], reverse=True)

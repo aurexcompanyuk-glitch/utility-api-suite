@@ -16,6 +16,8 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import besttime  # noqa: E402
+import osm  # noqa: E402
+import rhythms  # noqa: E402
 import geocoding  # noqa: E402
 import simulated  # noqa: E402
 from busyness import CheckinLevel, blend, checkins, score_to_level  # noqa: E402
@@ -452,3 +454,142 @@ def test_cache_evicts_when_full():
     for i in range(5):
         cache.set(f"k{i}", i, ttl=60)
     assert cache.stats()["entries"] <= 3
+
+
+# -- data provenance ---------------------------------------------------
+# The whole point: an estimate must never look like a measurement.
+
+def test_simulated_scores_are_labelled_estimated(client):
+    body = client.get("/v1/search?q=Manchester").json()
+    for venue in body["results"]:
+        assert venue["busyness"]["confidence"] == "estimated"
+        assert "not measured" in venue["busyness"]["confidence_note"]
+
+
+def test_live_besttime_data_is_labelled_measured():
+    from busyness import Confidence
+    result = blend(70, "v-measured", datetime.now(timezone.utc),
+                   "live", Confidence.measured)
+    assert result["confidence"] == "measured"
+    assert "measured" in result["confidence_note"].lower()
+
+
+def test_besttime_forecast_is_distinct_from_live():
+    from busyness import Confidence
+    result = blend(55, "v-forecast", datetime.now(timezone.utc),
+                   "forecast", Confidence.forecast)
+    assert result["confidence"] == "forecast"
+    assert "own history" in result["confidence_note"]
+
+
+def test_blending_reports_the_weaker_input():
+    from busyness import Confidence
+    now = datetime.now(timezone.utc)
+    checkins.add("v-mix", CheckinLevel.busy, now)
+    # Measured data plus a report is only as good as the report.
+    result = blend(70, "v-mix", now, "live", Confidence.measured)
+    assert result["confidence"] == "reported"
+
+
+def test_checkins_alone_are_labelled_reported():
+    now = datetime.now(timezone.utc)
+    checkins.add("v-only", CheckinLevel.packed, now)
+    assert blend(None, "v-only", now)["confidence"] == "reported"
+
+
+def test_no_data_is_labelled_unknown():
+    result = blend(None, "v-nothing", datetime.now(timezone.utc))
+    assert result["confidence"] == "unknown"
+    assert result["busyness_score"] is None
+
+
+# -- rhythms -----------------------------------------------------------
+
+def test_every_kind_has_two_full_curves():
+    for key, kind in rhythms.KINDS.items():
+        assert len(kind.weekday) == 24, key
+        assert len(kind.weekend) == 24, key
+        assert all(0 <= v <= 100 for v in kind.weekday + kind.weekend), key
+
+
+def test_kinds_peak_when_they_should():
+    peak = lambda c: c.index(max(c))
+    # A gym's weekday peak belongs in the evening rush, not at lunch.
+    assert peak(list(rhythms.KINDS["gym"].weekday)) >= 17
+    # A nightclub barely exists before late evening.
+    assert peak(list(rhythms.KINDS["nightclub"].weekend)) >= 22
+    # A bakery is a morning business.
+    assert peak(list(rhythms.KINDS["bakery"].weekday)) <= 9
+    # Stations spike with commuters.
+    assert peak(list(rhythms.KINDS["station"].weekday)) in range(7, 10)
+
+
+def test_banks_are_dead_at_the_weekend():
+    weekday = rhythms.KINDS["bank"].weekday
+    weekend = rhythms.KINDS["bank"].weekend
+    assert max(weekend) < max(weekday) / 2
+
+
+# -- OpenStreetMap parsing --------------------------------------------
+
+OVERPASS_SAMPLE = {
+    "elements": [
+        {"type": "node", "id": 1, "lat": 53.48, "lon": -2.24,
+         "tags": {"amenity": "restaurant", "name": "Real Pizza Co",
+                  "addr:housenumber": "12", "addr:street": "Deansgate"}},
+        {"type": "way", "id": 2, "center": {"lat": 53.49, "lon": -2.25},
+         "tags": {"leisure": "fitness_centre", "name": "City Gym"}},
+        {"type": "node", "id": 3, "lat": 53.47, "lon": -2.23,
+         "tags": {"shop": "supermarket", "name": "FoodMart"}},
+        # Unnamed and untagged features are not places a person can visit.
+        {"type": "node", "id": 4, "lat": 53.46, "lon": -2.22,
+         "tags": {"amenity": "restaurant"}},
+        {"type": "node", "id": 5, "lat": 53.45, "lon": -2.21, "tags": {"name": "Nowhere"}},
+        # A duplicate id must not produce a duplicate venue.
+        {"type": "node", "id": 1, "lat": 53.48, "lon": -2.24,
+         "tags": {"amenity": "restaurant", "name": "Real Pizza Co"}},
+    ]
+}
+
+
+def test_overpass_parsing_keeps_named_venues_only():
+    venues = osm.parse_elements(OVERPASS_SAMPLE)
+    names = [v["name"] for v in venues]
+    assert names == ["Real Pizza Co", "City Gym", "FoodMart"]
+
+
+def test_overpass_parsing_maps_tags_to_kinds():
+    kinds = {v["name"]: v["kind"] for v in osm.parse_elements(OVERPASS_SAMPLE)}
+    assert kinds == {"Real Pizza Co": "restaurant", "City Gym": "gym",
+                     "FoodMart": "supermarket"}
+
+
+def test_overpass_parsing_reads_a_way_centre():
+    gym = next(v for v in osm.parse_elements(OVERPASS_SAMPLE) if v["name"] == "City Gym")
+    assert gym["lat"] == 53.49 and gym["lng"] == -2.25
+
+
+def test_overpass_parsing_builds_addresses():
+    pizza = next(v for v in osm.parse_elements(OVERPASS_SAMPLE) if v["name"] == "Real Pizza Co")
+    assert pizza["address"] == "12 Deansgate"
+
+
+def test_overpass_parsing_survives_junk():
+    assert osm.parse_elements({}) == []
+    assert osm.parse_elements({"elements": "nonsense"}) == []
+    assert osm.parse_elements({"elements": [None, 5, {"no": "tags"}]}) == []
+
+
+def test_overpass_query_targets_the_right_area_and_tags():
+    q = osm.build_query(53.48, -2.24, 1200, ["restaurant", "gym"], 50)
+    assert "around:1200,53.48,-2.24" in q
+    assert "restaurant" in q and "fitness_centre" in q
+    # Unrequested kinds must not widen the query.
+    assert "pharmacy" not in q
+    assert "out center tags 50" in q
+
+
+def test_overpass_query_covers_everything_by_default():
+    q = osm.build_query(51.5, -0.12, 800)
+    for tag in ("restaurant", "pharmacy", "supermarket", "fitness_centre", "museum"):
+        assert tag in q

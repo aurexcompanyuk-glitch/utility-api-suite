@@ -18,6 +18,36 @@ class BusynessLevel(str, Enum):
     very_busy = "very_busy"
 
 
+class Confidence(str, Enum):
+    """How much the number is worth trusting.
+
+    The distinction matters: an estimate derived from a typical rhythm
+    for the kind of venue is NOT a measurement, and must never be
+    presented as one.
+    """
+    measured = "measured"      # BestTime live foot traffic, right now
+    forecast = "forecast"      # BestTime's own history for THIS venue
+    reported = "reported"      # people on the ground, recently
+    estimated = "estimated"    # typical rhythm for this KIND of venue
+    unknown = "unknown"        # nothing at all
+
+
+# Plain-English explanation shown to users, per confidence level.
+CONFIDENCE_TEXT = {
+    Confidence.measured: "Live foot traffic measured now",
+    Confidence.forecast: "Forecast from this venue's own history",
+    Confidence.reported: "Reported by people here recently",
+    Confidence.estimated: "Estimated from typical hours for this kind of place — not measured",
+    Confidence.unknown: "No busyness data for this venue",
+}
+
+# Ordered best-to-worst, so a mix of inputs reports its weakest link.
+_CONFIDENCE_RANK = [
+    Confidence.measured, Confidence.forecast,
+    Confidence.reported, Confidence.estimated, Confidence.unknown,
+]
+
+
 def score_to_level(score: int) -> str:
     if score < 26:
         return BusynessLevel.not_busy
@@ -122,11 +152,16 @@ def _checkin_signal(entries: list[tuple[datetime, int]],
 
 
 def blend(baseline: Optional[int], venue_id: str, now: Optional[datetime] = None,
-          baseline_source: str = "predicted") -> dict:
+          baseline_source: str = "predicted",
+          baseline_confidence: Confidence = Confidence.estimated) -> dict:
     """Combine a provider baseline with recent check-ins into one result.
 
     Either input may be missing: with no baseline the check-ins stand
     alone, and with no check-ins the baseline passes through unchanged.
+
+    Every result carries a `confidence` and a plain-English
+    `confidence_note`, so a number estimated from a generic rhythm is
+    never mistaken for a measurement.
     """
     now = now or datetime.now(timezone.utc)
     entries = checkins.recent(venue_id, now)
@@ -137,23 +172,34 @@ def blend(baseline: Optional[int], venue_id: str, now: Optional[datetime] = None
             "busyness_score": None,
             "level": None,
             "source": "unavailable",
+            "confidence": Confidence.unknown,
+            "confidence_note": CONFIDENCE_TEXT[Confidence.unknown],
             "recent_checkins": 0,
         }
 
     if baseline is None:
         score = clamp_score(checkin_avg)
         source = "checkins"
+        confidence = Confidence.reported
     elif checkin_avg is None:
         score = clamp_score(baseline)
         source = baseline_source
+        confidence = baseline_confidence
     else:
         score = clamp_score(baseline * (1 - weight) + checkin_avg * weight)
         source = f"{baseline_source}+checkins"
+        # A blend is only as trustworthy as its weaker input.
+        confidence = max(
+            (baseline_confidence, Confidence.reported),
+            key=lambda c: _CONFIDENCE_RANK.index(c),
+        )
 
     return {
         "busyness_score": score,
         "level": score_to_level(score),
         "source": source,
+        "confidence": confidence,
+        "confidence_note": CONFIDENCE_TEXT[confidence],
         "recent_checkins": len(entries),
     }
 
