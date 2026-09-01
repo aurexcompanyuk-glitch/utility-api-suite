@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Never commit real credentials — .env holds the BestTime private key.
+.env
+.env.local
+*.key
+
+.venue-index.json

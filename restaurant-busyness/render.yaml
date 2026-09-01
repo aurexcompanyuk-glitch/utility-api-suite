@@ -1,0 +1,19 @@
+# Render blueprint — https://render.com
+# Point Render at this repo and it configures the service from this file.
+services:
+  - type: web
+    name: busy-or-not
+    runtime: python
+    rootDir: restaurant-busyness
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      # Set this in the Render dashboard, not here — never commit a key.
+      - key: BESTTIME_API_KEY_PRIVATE
+        sync: false
+      - key: BESTTIME_API_KEY_PUBLIC
+        sync: false

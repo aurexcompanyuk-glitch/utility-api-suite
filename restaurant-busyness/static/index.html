@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Busy or Not — is it busy right now?</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%234ade80'/></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="dot"></span>
+    <h1>Busy<span>orNot</span></h1>
+  </div>
+  <div class="source" id="source-badge" title="Active data source">…</div>
+</header>
+
+<main>
+  <section class="hero">
+    <h2>Is it busy right now?</h2>
+    <p class="tagline">Search a restaurant, cafe or bar by name — or a whole city.</p>
+
+    <form class="searchbar" id="search-form" role="search" autocomplete="off">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" aria-hidden="true">
+        <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
+      </svg>
+      <input id="q" name="q" type="search" enterkeyhint="search"
+             placeholder="Try “The Copper Kettle”, “coffee in Leeds”, or “Manchester”"
+             aria-label="Search a venue or place">
+      <button type="button" id="geo-btn" class="icon-btn" title="Search near me"
+              aria-label="Search near me">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
+          <circle cx="12" cy="12" r="8"/>
+        </svg>
+      </button>
+      <button type="submit" class="primary" id="search-btn">Search</button>
+    </form>
+
+    <div class="examples" id="examples">
+      <span>Try:</span>
+      <button class="example" data-q="The Copper Kettle">The Copper Kettle</button>
+      <button class="example" data-q="coffee in Leeds">coffee in Leeds</button>
+      <button class="example" data-q="Manchester">Manchester</button>
+      <button class="example" data-q="sushi in London">sushi in London</button>
+      <button class="example" data-q="Edinburgh">Edinburgh</button>
+    </div>
+  </section>
+
+  <div class="controls" id="controls" hidden>
+    <div class="filters" id="filters">
+      <button class="chip active" data-filter="all">All</button>
+      <button class="chip" data-filter="quiet">Quiet now</button>
+      <button class="chip" data-filter="busy">Busy now</button>
+    </div>
+    <div class="viewtoggle" id="viewtoggle" role="group" aria-label="View as list or map">
+      <button data-view="list" aria-pressed="true">List</button>
+      <button data-view="map" aria-pressed="false">Map</button>
+    </div>
+    <label class="sort">
+      Sort
+      <select id="sort">
+        <option value="relevance">Best match</option>
+        <option value="busyness">Busiest first</option>
+        <option value="quietest">Quietest first</option>
+        <option value="distance">Nearest</option>
+        <option value="name">Name</option>
+      </select>
+    </label>
+    <button class="ghost" id="refresh-btn" title="Refresh busyness">Refresh</button>
+  </div>
+
+  <p class="status" id="status" role="status" aria-live="polite"></p>
+  <section class="grid" id="results"></section>
+  <section id="mapview" hidden>
+    <div id="map" aria-label="Map of search results"></div>
+    <p class="maplegend">
+      <span><i class="sw q"></i>Not busy</span>
+      <span><i class="sw m"></i>Moderate</span>
+      <span><i class="sw b"></i>Busy</span>
+      <span><i class="sw v"></i>Very busy</span>
+      <span class="attrib">Map data © OpenStreetMap contributors</span>
+    </p>
+  </section>
+</main>
+
+<div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-label="Venue details">
+  <button class="close" id="drawer-close" aria-label="Close">×</button>
+  <div id="drawer-body"></div>
+</aside>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
