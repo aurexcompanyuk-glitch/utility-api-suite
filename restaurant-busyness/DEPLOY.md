@@ -8,21 +8,23 @@ You do **not** need a Google Maps key — see "About Google Maps" at the bottom.
 
 ## Route A — Render (free tier, no card, easiest)
 
+The app is on `main`, so there is no branch to choose.
+
 1. Go to [render.com](https://render.com) and sign in with GitHub.
-2. **New → Web Service**, then pick `utility-api-suite`.
-3. Choose branch `claude/restaurant-busyness-app-8ldszx`.
-4. Render reads `render.yaml` and fills in the settings. If it asks manually:
-   - **Root directory:** `restaurant-busyness`
-   - **Build:** `pip install -r requirements.txt`
-   - **Start:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
-5. Open **Environment** and add:
+2. **New → Blueprint**, then pick `utility-api-suite`.
+3. Render reads `render.yaml` and configures the service itself — build
+   command, start command and root directory all come from that file.
+4. It then asks for the values marked `sync: false`. Paste your BestTime
+   private key (`pri_…`) into `BESTTIME_API_KEY_PRIVATE`. The public key
+   is optional; leave it blank if you don't have one.
+5. **Apply.** The first build takes 2–4 minutes.
 
-   | Key | Value |
-   |---|---|
-   | `BESTTIME_API_KEY_PRIVATE` | your `pri_…` key |
-   | `BESTTIME_API_KEY_PUBLIC` | your `pub_…` key |
-
-6. **Create Web Service.** First build takes 2–4 minutes.
+> Prefer to set it up by hand? **New → Web Service** works too, but
+> nothing is filled in for you — set **Root Directory** to
+> `restaurant-busyness`, **Build** to `pip install -r requirements.txt`,
+> **Start** to `uvicorn main:app --host 0.0.0.0 --port $PORT`, and add
+> the key under **Environment**. Missing the root directory is the usual
+> cause of a failed first build.
 
 Your app is at `https://<name>.onrender.com`.
 
