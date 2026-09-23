@@ -23,3 +23,17 @@ product UI), `frontend-design`, `impeccable-design-polish` and
 That repo is a whole desktop application carrying 537 skills; only these
 four were taken. Its `ui-ux-pro-max` skill is a catalog stub upstream —
 it carries no templates or workflow — so it was not installed.
+
+## ui-ux-pro-max (added 2026-09-23)
+
+The real skill from https://github.com/nextlevelbuilder/ui-ux-pro-max-skill
+(MIT) — not the catalog stub that ships inside open-design, which carries
+no templates, data or search workflow.
+
+Includes its searchable data (styles, product palettes, typography,
+colour, icons, motion, charts, UX guidelines), the reference rule files
+and `scripts/search.py`. Upstream test fixtures were dropped; nothing
+else was trimmed.
+
+Query it with:
+  python3 .claude/skills/ui-ux-pro-max/scripts/search.py "<query>" --domain <ux|style|color|typography|product|icons|chart|gsap>
