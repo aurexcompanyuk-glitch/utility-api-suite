@@ -24,6 +24,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import besttime  # noqa: E402
 from besttime import BestTimeClient, BestTimeError  # noqa: E402
 
 PASS, FAIL, WARN, INFO = "PASS", "FAIL", "WARN", "INFO"
@@ -110,17 +111,28 @@ async def main() -> int:
                         # Confirms index 0 == midnight: the quietest hours of a
                         # venue's day should sit in the small hours, not midday.
                         peak = hourly.index(max(hourly))
-                        report(INFO, f"{day.get('day_name')} peak at index {peak}",
+                        report(INFO, f"{day.get('day_name')} peak at {peak}:00",
                                f"open={day.get('open_hour')} close={day.get('close_hour')} "
                                f"curve={hourly}")
+                        # The parser shifts day_raw by six hours so index 0
+                        # is midnight. The proof that it is still shifting by
+                        # the right amount is that busy hours land inside the
+                        # venue's own published opening hours.
                         if day.get("open_hour") is not None and max(hourly) > 0:
-                            if peak < day["open_hour"]:
-                                report(WARN, "index alignment",
-                                       "peak falls before opening hour — day_raw may not "
-                                       "start at midnight; check DAY_RAW offset")
+                            busy = [h for h, v in enumerate(hourly) if v]
+                            if busy[0] < day["open_hour"] or (
+                                day.get("close_hour") and busy[-1] >= day["close_hour"]
+                            ):
+                                report(FAIL, "index alignment",
+                                       f"busy {busy[0]}:00-{busy[-1] + 1}:00 falls outside "
+                                       f"opening hours {day['open_hour']}:00-"
+                                       f"{day.get('close_hour')}:00 — BestTime may have changed "
+                                       f"its DAY_RAW_START_HOUR (currently "
+                                       f"{besttime.DAY_RAW_START_HOUR})")
+                                failures += 1
                             else:
                                 report(PASS, "index alignment",
-                                       "peak falls within opening hours")
+                                       "busy hours fall inside the venue's opening hours")
             except BestTimeError as exc:
                 report(FAIL, "create forecast", str(exc))
                 failures += 1

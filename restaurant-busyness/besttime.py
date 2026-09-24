@@ -12,7 +12,7 @@ endpoints and field names below match the current API.
 
 Endpoints used (BestTime API v1):
   POST /forecasts            create/refresh a venue forecast   (private key)
-  GET  /forecasts/live       live foot traffic for a venue     (private key)
+  POST /forecasts/live       live foot traffic for a venue     (private key)
   GET  /forecasts/week/raw   raw weekly forecast               (public key)
   POST /venues/search        async venue radar search          (private key)
   GET  /venues/progress      poll a venue search job           (private key)
@@ -160,7 +160,9 @@ class BestTimeClient:
         if not venue_id and not (venue_name and venue_address):
             raise ValueError("live_busyness needs venue_id, or venue_name and venue_address")
 
-        body = await self._request("GET", "/forecasts/live", {
+        # POST, not GET: the live endpoint 404s on GET and returns
+        # BestTime's HTML error page rather than JSON. Verified 2026-09-24.
+        body = await self._request("POST", "/forecasts/live", {
             "api_key_private": self._private_key,
             "venue_id": venue_id,
             "venue_name": venue_name,
@@ -262,6 +264,21 @@ def _venue_list(body: dict) -> list[dict]:
     return []
 
 
+def _first(*args):
+    """First non-None value for any of `keys`, across the given dicts.
+
+    Written as an explicit None check rather than `or` because 0 is a
+    legitimate coordinate and must not fall through to the next source.
+    """
+    *sources, = [a for a in args if isinstance(a, dict)]
+    keys = [a for a in args if isinstance(a, str)]
+    for source in sources:
+        for key in keys:
+            if source.get(key) is not None:
+                return source[key]
+    return None
+
+
 def parse_venue(raw: dict) -> dict:
     """Normalize one BestTime venue object into this app's venue shape."""
     info = raw.get("venue_info") if isinstance(raw.get("venue_info"), dict) else raw
@@ -277,8 +294,10 @@ def parse_venue(raw: dict) -> dict:
         "venue_id": info.get("venue_id") or raw.get("venue_id"),
         "name": info.get("venue_name") or raw.get("venue_name"),
         "address": info.get("venue_address") or raw.get("venue_address"),
-        "lat": _as_float(info.get("venue_lat")),
-        "lng": _as_float(info.get("venue_lng")),
+        "lat": _as_float(_first(info, raw, "venue_lat")),
+        # Both spellings are live in the API: "venue_lng" from /venues and
+        # the radar search, "venue_lon" from /forecasts/live.
+        "lng": _as_float(_first(info, raw, "venue_lng", "venue_lon")),
         "timezone": info.get("venue_timezone"),
         "venue_type": info.get("venue_type") or raw.get("venue_type"),
         "venue_types": [str(t) for t in venue_types],
@@ -290,7 +309,7 @@ def parse_venue(raw: dict) -> dict:
 
 
 def parse_live(body: dict) -> dict:
-    """Normalize GET /forecasts/live."""
+    """Normalize POST /forecasts/live."""
     analysis = body.get("analysis") if isinstance(body.get("analysis"), dict) else {}
     info = body.get("venue_info") if isinstance(body.get("venue_info"), dict) else {}
 
@@ -320,20 +339,74 @@ def parse_forecast(body: dict) -> dict:
 
 
 def parse_week(body: dict) -> dict:
-    """Normalize GET /forecasts/week/raw."""
+    """Normalize GET /forecasts/week/raw.
+
+    This endpoint answers with a flat 168-hour list under
+    `analysis.week_raw` rather than the per-day objects the other
+    forecast endpoints return, so it needs its own unpacking.
+    """
     info = body.get("venue_info") if isinstance(body.get("venue_info"), dict) else {}
+    if not info and body.get("venue_name"):
+        info = {"venue_name": body.get("venue_name"), "venue_id": body.get("venue_id")}
+
     week = _parse_day_analysis(body.get("analysis"))
     if not week:
-        week = _parse_day_analysis(body.get("week_raw"))
+        analysis = body.get("analysis") if isinstance(body.get("analysis"), dict) else {}
+        flat = analysis.get("week_raw") or body.get("week_raw")
+        week = _parse_flat_week(flat)
     return {"venue": parse_venue({"venue_info": info}), "week": week}
+
+
+def _parse_flat_week(flat: Any) -> list[dict]:
+    """Turn a flat 168-hour week into the same day objects as the rest.
+
+    Hour 0 of the flat list is Monday 06:00, matching `day_raw`, so the
+    whole list shifts by the same six hours before it is cut into days.
+    """
+    if not isinstance(flat, list) or len(flat) != 168:
+        return []
+
+    values = [_clamp_score(v) or 0 for v in flat]
+    shifted = [values[(i - DAY_RAW_START_HOUR) % 168] for i in range(168)]
+    names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+    days = []
+    for day_int in range(7):
+        hours = shifted[day_int * 24:(day_int + 1) * 24]
+        lit = [h for h, v in enumerate(hours) if v]
+        days.append({
+            "day_int": day_int,
+            "day_name": names[day_int],
+            "open_hour": lit[0] if lit else None,
+            "close_hour": lit[-1] + 1 if lit else None,
+            "hourly_raw": values[day_int * 24:(day_int + 1) * 24],
+            "hourly_busyness": hours,
+            "peak_hours": [], "quiet_hours": [], "busy_hours": [],
+        })
+    return days
+
+
+# BestTime's `day_raw` does not start at midnight. Each day's array runs
+# from 06:00 local on that day to 05:00 the following morning. Proven
+# against a venue with published opening hours (Borough Market, London,
+# verified 2026-09-24): on days it opened at 10:00 the first non-zero
+# value sat at index 4, and on the day it opened at 09:00 at index 3 —
+# i.e. index = hour - 6 in both cases.
+#
+# Reading index 0 as midnight would shift every curve six hours earlier,
+# so a lunch peak would render as a 6am peak. Everything downstream of
+# this module assumes midnight indexing, so the correction happens here,
+# once, rather than at each call site.
+DAY_RAW_START_HOUR = 6
 
 
 def _parse_day_analysis(analysis: Any) -> list[dict]:
     """Turn BestTime's per-day analysis into 7 normalized day objects.
 
-    `day_raw` is a 24-element list of busyness percentages. Index 0 is
-    treated as midnight local time; verify_besttime.py cross-checks this
-    against each day's reported opening hour.
+    `hourly_busyness` is re-indexed to local midnight. Because a day's
+    00:00–05:00 live in the *previous* day's array, this needs the whole
+    week to do correctly — a single day cannot be rotated on its own.
+    `hourly_raw` keeps BestTime's original 06:00-based array.
     """
     if not isinstance(analysis, list):
         return []
@@ -344,16 +417,55 @@ def _parse_day_analysis(analysis: Any) -> list[dict]:
             continue
         day_info = entry.get("day_info") if isinstance(entry.get("day_info"), dict) else {}
         raw = entry.get("day_raw")
-        hourly = [_clamp_score(v) or 0 for v in raw] if isinstance(raw, list) else []
+        hourly_raw = [_clamp_score(v) or 0 for v in raw] if isinstance(raw, list) else []
 
         days.append({
             "day_int": _as_int(day_info.get("day_int")),
             "day_name": day_info.get("day_text"),
             "open_hour": _as_int(day_info.get("venue_open")),
             "close_hour": _as_int(day_info.get("venue_closed")),
-            "hourly_busyness": hourly,
+            "hourly_raw": hourly_raw,
+            "hourly_busyness": list(hourly_raw),   # corrected below
             "peak_hours": entry.get("peak_hours") if isinstance(entry.get("peak_hours"), list) else [],
             "quiet_hours": entry.get("quiet_hours") if isinstance(entry.get("quiet_hours"), list) else [],
             "busy_hours": entry.get("busy_hours") if isinstance(entry.get("busy_hours"), list) else [],
         })
+
+    _reindex_week_to_midnight(days)
     return days
+
+
+def _reindex_week_to_midnight(days: list[dict]) -> None:
+    """Rewrite each day's `hourly_busyness` to start at local midnight.
+
+    Lays the week out as one 168-hour timeline, then slices calendar
+    days out of it. Hours 00:00–05:00 of a given day therefore come from
+    the tail of the day before — which is where BestTime actually puts
+    them, and which matters for anywhere open past midnight.
+
+    Days are placed by `day_int` (Monday = 0). If that is missing or the
+    week is incomplete, the arrays are left exactly as BestTime sent
+    them: a wrong rotation is worse than a documented raw value.
+    """
+    usable = [d for d in days if len(d.get("hourly_raw") or []) == 24]
+    if len(usable) != 7:
+        return
+
+    by_day: dict[int, list[int]] = {}
+    for day in usable:
+        day_int = day.get("day_int")
+        if day_int is None or not 0 <= day_int <= 6 or day_int in by_day:
+            return                       # ambiguous ordering — leave raw
+        by_day[day_int] = day["hourly_raw"]
+
+    # timeline[h] is busyness at absolute hour h of the week, h=0 being
+    # Monday 00:00. Day d index i is the hour d*24 + 6 + i, wrapping the
+    # end of Sunday back onto Monday's small hours.
+    timeline = [0] * 168
+    for day_int, values in by_day.items():
+        for i, value in enumerate(values):
+            timeline[(day_int * 24 + DAY_RAW_START_HOUR + i) % 168] = value
+
+    for day in usable:
+        base = day["day_int"] * 24
+        day["hourly_busyness"] = timeline[base:base + 24]

@@ -427,6 +427,95 @@ def test_parse_forecast_builds_a_week():
     assert len(parsed["week"][0]["hourly_busyness"]) == 24
 
 
+# Real shape returned by BestTime for Borough Market, London (captured
+# 2026-09-24). The venue publishes its opening hours, which is what makes
+# it usable as a fixture: the busy window in the parsed curve has to land
+# on those hours, so a re-introduced offset bug fails loudly.
+BOROUGH_MARKET_ANALYSIS = [
+    {"day_info": {"day_int": 0, "day_text": "Monday", "venue_open": 0, "venue_closed": 0},
+     "day_raw": [0] * 24},
+    {"day_info": {"day_int": 1, "day_text": "Tuesday", "venue_open": 10, "venue_closed": 17},
+     "day_raw": [0, 0, 0, 0, 30, 45, 55, 65, 60, 55, 45] + [0] * 13},
+    {"day_info": {"day_int": 2, "day_text": "Wednesday", "venue_open": 10, "venue_closed": 17},
+     "day_raw": [0, 0, 0, 0, 25, 40, 50, 60, 55, 50, 45] + [0] * 13},
+    {"day_info": {"day_int": 3, "day_text": "Thursday", "venue_open": 10, "venue_closed": 17},
+     "day_raw": [0, 0, 0, 0, 30, 45, 60, 65, 65, 55, 50] + [0] * 13},
+    {"day_info": {"day_int": 4, "day_text": "Friday", "venue_open": 10, "venue_closed": 17},
+     "day_raw": [0, 0, 0, 0, 30, 50, 65, 75, 75, 65, 55] + [0] * 13},
+    {"day_info": {"day_int": 5, "day_text": "Saturday", "venue_open": 9, "venue_closed": 17},
+     "day_raw": [0, 0, 0, 25, 45, 65, 85, 100, 100, 90, 75] + [0] * 13},
+    {"day_info": {"day_int": 6, "day_text": "Sunday", "venue_open": 10, "venue_closed": 16},
+     "day_raw": [0, 0, 0, 0, 30, 50, 60, 70, 70, 60] + [0] * 14},
+]
+
+
+def test_day_raw_is_reindexed_to_midnight():
+    """BestTime's day_raw starts at 06:00; the parsed curve must not.
+
+    Read naively, Tuesday's busy window would come out as 04:00-11:00
+    against published hours of 10:00-17:00 — a six-hour error that makes
+    a lunchtime market look like a breakfast one.
+    """
+    week = besttime._parse_day_analysis(BOROUGH_MARKET_ANALYSIS)
+    assert len(week) == 7
+
+    for day in week:
+        busy = [hour for hour, value in enumerate(day["hourly_busyness"]) if value]
+        if not busy:
+            assert day["day_name"] == "Monday"   # the one day it is shut
+            continue
+        assert busy[0] == day["open_hour"], f"{day['day_name']} opens late"
+        assert busy[-1] + 1 == day["close_hour"], f"{day['day_name']} closes early"
+
+
+def test_reindexing_keeps_the_original_array_available():
+    week = besttime._parse_day_analysis(BOROUGH_MARKET_ANALYSIS)
+    tuesday = week[1]
+    assert tuesday["hourly_raw"][4] == 30            # 10:00 in BestTime's indexing
+    assert tuesday["hourly_busyness"][10] == 30      # 10:00 in ours
+    assert tuesday["hourly_busyness"][4] == 0        # 04:00 really is quiet
+
+
+def test_late_night_hours_land_on_the_following_day():
+    """A venue open past midnight puts 01:00 in the previous day_raw.
+
+    Day 5 index 19 is Saturday 01:00 — which is Sunday morning, not
+    Saturday's. Getting this wrong is how a nightclub's peak ends up on
+    the wrong day of the week.
+    """
+    analysis = []
+    for day_int in range(7):
+        raw = [0] * 24
+        if day_int == 5:
+            raw[19] = 90                             # Sat 06:00 + 19h = Sun 01:00
+        analysis.append({
+            "day_info": {"day_int": day_int, "day_text": f"D{day_int}",
+                         "venue_open": 22, "venue_closed": 3},
+            "day_raw": raw,
+        })
+
+    week = besttime._parse_day_analysis(analysis)
+    assert week[6]["hourly_busyness"][1] == 90       # Sunday 01:00
+    assert week[5]["hourly_busyness"][19] == 0       # not Saturday 19:00
+
+
+def test_incomplete_weeks_are_left_untouched_rather_than_mis_rotated():
+    """A partial week cannot be rotated correctly, so it is not rotated.
+
+    Silently shifting an incomplete week would produce plausible-looking
+    numbers that are simply wrong.
+    """
+    partial = BOROUGH_MARKET_ANALYSIS[:3]
+    week = besttime._parse_day_analysis(partial)
+    assert week[1]["hourly_busyness"] == week[1]["hourly_raw"]
+
+
+def test_duplicate_day_numbers_are_left_untouched():
+    dupes = BOROUGH_MARKET_ANALYSIS[:6] + [dict(BOROUGH_MARKET_ANALYSIS[5])]
+    week = besttime._parse_day_analysis(dupes)
+    assert week[1]["hourly_busyness"] == week[1]["hourly_raw"]
+
+
 def test_parse_venue_handles_flat_and_nested_shapes():
     nested = besttime.parse_venue({"venue_info": {"venue_id": "a", "venue_name": "N"}})
     flat = besttime.parse_venue({"venue_id": "a", "venue_name": "N"})
@@ -656,3 +745,39 @@ def test_health_reports_index_and_spend(client):
     body = client.get("/health").json()
     assert "venue_index" in body
     assert "credits_spent_estimate" in body["besttime_spend"]
+
+
+def test_parse_week_unpacks_the_flat_168_hour_list():
+    """/forecasts/week/raw answers with one flat week, not seven days.
+
+    The same six-hour offset applies, so Borough Market's real Tuesday
+    (10:00-17:00, lunchtime peak) has to come back out intact.
+    """
+    flat = [0] * 28 + [30, 45, 55, 65, 60, 55, 45] + [0] * 133
+    parsed = besttime.parse_week({"venue_name": "Borough Market",
+                                  "analysis": {"week_raw": flat}})
+    assert len(parsed["week"]) == 7
+    tuesday = parsed["week"][1]
+    assert tuesday["day_name"] == "Tuesday"
+    assert tuesday["open_hour"] == 10
+    assert tuesday["close_hour"] == 17
+    assert tuesday["hourly_busyness"].index(max(tuesday["hourly_busyness"])) == 13
+
+
+def test_parse_week_ignores_a_wrong_length_payload():
+    assert besttime.parse_week({"analysis": {"week_raw": [0] * 24}})["week"] == []
+
+
+def test_parse_venue_accepts_both_longitude_spellings():
+    """/forecasts/live says venue_lon; /venues and the radar say venue_lng."""
+    from_live = besttime.parse_venue({"venue_info": {"venue_id": "a", "venue_lon": -0.09}})
+    from_list = besttime.parse_venue({"venue_id": "a", "venue_lng": -0.13})
+    assert from_live["lng"] == -0.09
+    assert from_list["lng"] == -0.13
+
+
+def test_zero_coordinates_are_not_treated_as_missing():
+    """Null Island is a real coordinate; `or` would silently drop it."""
+    parsed = besttime.parse_venue({"venue_info": {"venue_id": "a", "venue_lat": 0, "venue_lng": 0}})
+    assert parsed["lat"] == 0.0
+    assert parsed["lng"] == 0.0
