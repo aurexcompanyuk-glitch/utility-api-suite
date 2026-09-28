@@ -13,6 +13,19 @@ Each entry is:
 | `a` | Address |
 | `lat` / `lng` | Coordinates |
 | `w` | 168 busyness values, **Monday 00:00 → Sunday 23:00 local time** |
+| `rating` / `reviews` | Google rating and review count, or `null` |
+| `price` | 1–4, or `null` when not published |
+| `type` / `types` | BestTime's own category and its tag list |
+| `dwellMin` / `dwellMax` | Typical minutes spent at the venue |
+| `days` | Seven entries, Monday first — see below — or `null` |
+
+Each `days` entry carries `open`, `close`, `hours` (a printable string),
+`rankMean` (1 = busiest day of that venue's week), `dayMean`, `dayMax`,
+`peak`, `quiet`, `arrive` and `leave`.
+
+Ten of the 53 venues have `days: null`: the free BestTime query quota ran
+out mid-harvest. Their `w` curves are complete and real — only the extra
+detail is missing, and the app says so rather than filling the gap in.
 
 ## About `w`
 
