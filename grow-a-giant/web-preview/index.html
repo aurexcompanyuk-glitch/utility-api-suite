@@ -1,0 +1,552 @@
+<title>Grow a Giant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Rubik:wght@400;500;700&display=swap">
+<style>
+/* Layout: full-bleed 3D plot; HUD floats over it - stats top, shop right (bottom sheet on phones), stomach bottom. */
+:root {
+  color-scheme: dark;
+  --panel: rgba(24, 27, 44, 0.86);
+  --panel-raised: #2c3050;
+  --line: rgba(255, 255, 255, 0.10);
+  --text: #f6f5fb;
+  --muted: #a9adc6;
+  --cash: #8ee87a;
+  --buy: #3fae5f;
+  --feed: #f08c32;
+  --off: #4a4d66;
+  --bad: #e2574c;
+  --sky: #8fd0f5;
+  --font-display: "Lilita One", "Arial Rounded MT Bold", "Trebuchet MS", sans-serif;
+  --font-body: "Rubik", "Segoe UI", system-ui, sans-serif;
+}
+html, body { height: 100%; }
+body {
+  margin: 0; overflow: hidden; background: var(--sky); color: var(--text);
+  font-family: var(--font-body); -webkit-font-smoothing: antialiased;
+}
+#scene { position: fixed; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+#scene:active { cursor: grabbing; }
+button { font: inherit; color: inherit; border: 0; cursor: pointer; }
+button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+
+.hud { position: fixed; inset: 0; pointer-events: none; padding: env(safe-area-inset-top, 0px) 16px env(safe-area-inset-bottom, 0px); }
+.hud > * { pointer-events: auto; }
+
+.stats {
+  position: absolute; top: calc(10px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 18px; padding: 8px 18px; border-radius: 16px;
+  background: var(--panel); backdrop-filter: blur(6px); box-shadow: 0 6px 20px rgba(0,0,0,.25);
+  white-space: nowrap; font-variant-numeric: tabular-nums; max-width: calc(100% - 32px);
+}
+.stat { display: flex; flex-direction: column; line-height: 1.05; }
+.stat small { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+.stat b { font-family: var(--font-display); font-weight: 400; font-size: 26px; }
+#cash { color: var(--cash); }
+#income { font-size: 16px; color: var(--muted); }
+.sep { width: 1px; align-self: stretch; background: var(--line); }
+
+.toasts { position: absolute; top: calc(80px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); display: grid; gap: 6px; width: min(440px, calc(100% - 32px)); pointer-events: none; }
+.toast { padding: 9px 14px; border-radius: 10px; font-weight: 500; font-size: 14px; text-align: center; background: #3b67c9; box-shadow: 0 4px 14px rgba(0,0,0,.25); transition: opacity .4s, transform .4s; }
+.toast.error { background: var(--bad); }
+.toast.success { background: var(--buy); }
+.toast.out { opacity: 0; transform: translateY(-6px); }
+
+.shop {
+  position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
+  width: 330px; max-height: min(600px, calc(100% - 260px)); display: flex; flex-direction: column;
+  border-radius: 16px; background: var(--panel); backdrop-filter: blur(6px); box-shadow: 0 8px 26px rgba(0,0,0,.3);
+}
+.shop-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 8px; background: none; text-align: left; }
+.shop-head h2 { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: 22px; letter-spacing: .03em; }
+.shop-head .chev { display: none; color: var(--muted); }
+.food-list { overflow-y: auto; padding: 0 10px 10px; display: grid; gap: 6px; }
+.food { display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center; padding: 8px; border-radius: 12px; background: var(--panel-raised); }
+.swatch { width: 44px; height: 44px; border-radius: 50%; box-shadow: inset 0 -5px 0 rgba(0,0,0,.22), inset 0 4px 0 rgba(255,255,255,.25); }
+.food-info { min-width: 0; }
+.food-name { font-weight: 700; font-size: 15px; }
+.food-meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.food-btns { display: grid; gap: 4px; }
+.btn { min-width: 64px; padding: 5px 10px; border-radius: 8px; font-weight: 700; font-size: 13px; box-shadow: inset 0 -3px 0 rgba(0,0,0,.25); transition: filter .15s, transform .05s; }
+.btn:hover { filter: brightness(1.12); }
+.btn:active { transform: translateY(1px); }
+.btn.buy { background: var(--buy); }
+.btn.feed { background: var(--feed); }
+.btn.off { background: var(--off); color: var(--muted); }
+
+.stomach {
+  position: absolute; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
+  padding: 8px 10px 10px; border-radius: 16px; background: var(--panel); backdrop-filter: blur(6px); box-shadow: 0 6px 20px rgba(0,0,0,.25);
+}
+.stomach h3 { margin: 0 0 6px; text-align: center; font-size: 10px; letter-spacing: .14em; color: var(--muted); font-weight: 700; }
+.slots { display: flex; gap: 6px; }
+.slot { position: relative; width: 112px; height: 50px; border-radius: 10px; background: var(--panel-raised); overflow: hidden; display: grid; place-content: center; text-align: center; }
+.slot .fill { position: absolute; inset: 0 auto 0 0; width: 0; opacity: .55; }
+.slot span { position: relative; font-weight: 700; font-size: 14px; }
+.slot small { position: relative; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.slot.empty span { color: var(--muted); font-weight: 500; }
+
+.label3d {
+  position: absolute; left: 0; top: 0; transform: translate(-50%, -100%); pointer-events: none; text-align: center;
+  font-family: var(--font-display); font-size: 20px; line-height: 1.1; color: #fff;
+  text-shadow: 0 2px 0 rgba(0,0,0,.45), 0 0 8px rgba(0,0,0,.35); white-space: nowrap;
+}
+.label3d b { display: block; font-size: 26px; font-weight: 400; color: #ffe46b; }
+
+.dev { position: absolute; left: 16px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); display: grid; gap: 6px; justify-items: start; }
+.dev-toggle { padding: 6px 10px; border-radius: 8px; background: var(--panel); color: var(--muted); font-size: 12px; font-weight: 700; }
+.dev-panel { display: grid; gap: 6px; padding: 10px; border-radius: 12px; background: var(--panel); max-width: 220px; }
+.dev-panel p { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.35; }
+.dev-panel .btn { background: var(--panel-raised); text-align: left; }
+.offline-note { position: absolute; left: 16px; top: calc(12px + env(safe-area-inset-top, 0px)); font-size: 12px; color: rgba(20,30,50,.75); font-weight: 500; max-width: 170px; line-height: 1.3; }
+
+@media (max-width: 760px) {
+  .stats { gap: 10px; padding: 6px 12px; }
+  .stat b { font-size: 20px; }
+  #income { font-size: 13px; }
+  .offline-note { display: none; }
+  .shop { top: auto; transform: none; left: 16px; right: 16px; width: auto; bottom: calc(96px + env(safe-area-inset-bottom, 0px)); max-height: 46%; }
+  .shop.collapsed .food-list { display: none; }
+  .shop-head { width: 100%; }
+  .shop-head .chev { display: inline; }
+  .stomach { width: calc(100% - 32px); box-sizing: border-box; }
+  .slots { justify-content: space-between; }
+  .slot { width: auto; flex: 1; min-width: 0; height: 44px; }
+  .slot span { font-size: 12px; }
+  .dev { bottom: auto; top: calc(70px + env(safe-area-inset-top, 0px)); }
+  .label3d { font-size: 15px; } .label3d b { font-size: 20px; }
+}
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+</style>
+
+<canvas id="scene" aria-label="Your Giant standing on its plot. Drag to look around."></canvas>
+<div class="hud">
+  <div class="label3d" id="label"><span id="labelName">Your Giant</span><b id="labelHeight">10.0m</b></div>
+
+  <div class="stats" role="status" aria-live="off">
+    <div class="stat"><small>Cash</small><b id="cash">$50</b></div>
+    <div class="stat"><small>Income</small><b id="income">+1/s</b></div>
+    <span class="sep"></span>
+    <div class="stat"><small>Height</small><b id="height">10.0m</b></div>
+  </div>
+
+  <p class="offline-note">Food keeps digesting while this tab is closed, for up to 24 hours.</p>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <section class="shop collapsed" id="shop" aria-label="Food shop">
+    <button class="shop-head" id="shopHead" aria-expanded="false"><h2>Food Shop</h2><span class="chev" id="chev">Show ▴</span></button>
+    <div class="food-list" id="foodList"></div>
+  </section>
+
+  <section class="stomach" aria-label="Stomach">
+    <h3>STOMACH</h3>
+    <div class="slots" id="slots"></div>
+  </section>
+
+  <div class="dev">
+    <div class="dev-panel" id="devPanel" hidden>
+      <p>Test tools, same as the Studio-only cheat. Use them to see the size cap.</p>
+      <button class="btn" id="devCash">+ $1M cash</button>
+      <button class="btn" id="devMass">+ 1 billion mass</button>
+      <button class="btn" id="devMassHuge">+ 1e15 mass</button>
+      <button class="btn" id="devReset">Reset progress</button>
+    </div>
+    <button class="dev-toggle" id="devToggle" aria-expanded="false">Test tools</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function () {
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Same numbers as src/shared/Config.luau and GrowthMath.luau in the Roblox game
+// ---------------------------------------------------------------------------
+const Config = {
+  StartingCash: 50,
+  StomachSlots: 4,
+  MaxOfflineSeconds: 24 * 60 * 60,
+  Foods: [
+    { id: "apple", name: "Apple", price: 10, mass: 10, digestSeconds: 15, color: "#dc3c3c" },
+    { id: "bread", name: "Bread", price: 60, mass: 70, digestSeconds: 30, color: "#d6aa64" },
+    { id: "burger", name: "Burger", price: 400, mass: 520, digestSeconds: 60, color: "#a05a28" },
+    { id: "pizza", name: "Pizza", price: 2500, mass: 3600, digestSeconds: 100, color: "#f0b43c" },
+    { id: "cake", name: "Cake", price: 15000, mass: 24000, digestSeconds: 160, color: "#f5a0c8" },
+    { id: "turkey", name: "Turkey", price: 100000, mass: 180000, digestSeconds: 240, color: "#be6e32" },
+    { id: "goldsteak", name: "Golden Steak", price: 750000, mass: 1500000, digestSeconds: 360, color: "#ffd700" },
+  ],
+};
+const FoodsById = Object.fromEntries(Config.Foods.map(f => [f.id, f]));
+
+const Growth = {
+  BaseHeight: 10, HeightPerLog: 25, MassScale: 100,
+  MaxVisualScale: 12, VisualSoftness: 150,
+  BaseIncome: 1, IncomeExponent: 2,
+  height(mass) { return this.BaseHeight + this.HeightPerLog * Math.log(1 + Math.max(mass, 0) / this.MassScale); },
+  visualScale(h) { const g = Math.max(h - this.BaseHeight, 0); return 1 + (this.MaxVisualScale - 1) * (1 - Math.exp(-g / this.VisualSoftness)); },
+  income(h) { return this.BaseIncome * Math.pow(Math.max(h, this.BaseHeight) / this.BaseHeight, this.IncomeExponent); },
+};
+
+function digest(stomach, seconds) {
+  let gained = 0; const left = [];
+  seconds = Math.max(seconds, 0);
+  for (const item of stomach) {
+    const food = FoodsById[item.foodId];
+    if (!food) continue;
+    const step = Math.min(seconds, item.remaining);
+    gained += food.mass * (step / food.digestSeconds);
+    const remaining = item.remaining - step;
+    if (remaining > 1e-6) left.push({ foodId: item.foodId, remaining });
+  }
+  return [gained, left];
+}
+
+// Same formatting as src/shared/Format.luau
+const SUFFIXES = ["", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc"];
+function fmtNum(n) {
+  if (n !== n) return "0";
+  const sign = n < 0 ? "-" : ""; n = Math.abs(n);
+  if (n < 1000) return sign + Math.floor(n);
+  const tier = Math.min(Math.floor(Math.log10(n) / 3), SUFFIXES.length - 1);
+  const s = n / Math.pow(10, tier * 3);
+  let t = s >= 100 ? String(Math.floor(s)) : s >= 10 ? (Math.floor(s * 10) / 10).toFixed(1) : (Math.floor(s * 100) / 100).toFixed(2);
+  if (t.includes(".")) t = t.replace(/0+$/, "").replace(/\.$/, "");
+  return sign + t + SUFFIXES[tier + 1];
+}
+const fmtCash = n => "$" + fmtNum(n);
+const fmtHeight = m => m < 1000 ? m.toFixed(1) + "m" : fmtNum(m) + "m";
+function fmtTime(s) {
+  s = Math.max(0, Math.ceil(s));
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m " + String(s % 60).padStart(2, "0") + "s";
+  return Math.floor(m / 60) + "h " + String(m % 60).padStart(2, "0") + "m";
+}
+
+// ---------------------------------------------------------------------------
+// Save data (this browser only)
+// ---------------------------------------------------------------------------
+const SAVE_KEY = "grow-a-giant-v1";
+function freshData() { return { cash: Config.StartingCash, mass: 0, inventory: {}, stomach: [], lastSeen: Date.now() }; }
+function loadData() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    const base = freshData();
+    for (const k in base) if (d[k] !== undefined && typeof d[k] === typeof base[k]) base[k] = d[k];
+    return base;
+  } catch (e) { return null; }
+}
+function saveData() {
+  data.lastSeen = Date.now();
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch (e) { /* storage blocked: play without saving */ }
+}
+
+let chomp = 0; // mouth animation, set when the Giant eats
+
+const hot = window.claude && window.claude.hot;
+let data = (hot && hot.data && hot.data.game) || loadData() || freshData();
+if (hot && hot.snapshot) hot.snapshot(() => ({ game: data }));
+
+// ---------------------------------------------------------------------------
+// HUD
+// ---------------------------------------------------------------------------
+const $ = id => document.getElementById(id);
+const toastsEl = $("toasts");
+function toast(msg, kind) {
+  const el = document.createElement("div");
+  el.className = "toast " + (kind || "");
+  el.textContent = msg;
+  toastsEl.appendChild(el);
+  while (toastsEl.children.length > 3) toastsEl.firstChild.remove();
+  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 400); }, 3200);
+}
+
+const rows = {};
+for (const food of Config.Foods) {
+  const row = document.createElement("div");
+  row.className = "food";
+  row.innerHTML =
+    `<div class="swatch" style="background:${food.color}"></div>
+     <div class="food-info">
+       <div class="food-name">${food.name}</div>
+       <div class="food-meta">${fmtCash(food.price)} · +${fmtNum(food.mass)} mass</div>
+       <div class="food-meta" data-owned>Owned: 0 · ${fmtTime(food.digestSeconds)}</div>
+     </div>
+     <div class="food-btns">
+       <button class="btn buy" id="buy-${food.id}">Buy</button>
+       <button class="btn feed" id="feed-${food.id}">Feed</button>
+     </div>`;
+  $("foodList").appendChild(row);
+  rows[food.id] = { owned: row.querySelector("[data-owned]"), buy: row.querySelector(".buy"), feed: row.querySelector(".feed") };
+  rows[food.id].buy.addEventListener("click", () => buyFood(food.id));
+  rows[food.id].feed.addEventListener("click", () => feedFood(food.id));
+}
+
+const slotEls = [];
+for (let i = 0; i < Config.StomachSlots; i++) {
+  const el = document.createElement("div");
+  el.className = "slot empty";
+  el.innerHTML = `<div class="fill"></div><span>Empty</span><small></small>`;
+  $("slots").appendChild(el);
+  slotEls.push({ el, fill: el.querySelector(".fill"), name: el.querySelector("span"), time: el.querySelector("small") });
+}
+
+$("shopHead").addEventListener("click", () => {
+  const shop = $("shop");
+  const collapsed = shop.classList.toggle("collapsed");
+  $("shopHead").setAttribute("aria-expanded", String(!collapsed));
+  $("chev").textContent = collapsed ? "Show ▴" : "Hide ▾";
+});
+$("devToggle").addEventListener("click", () => {
+  const p = $("devPanel"); p.hidden = !p.hidden;
+  $("devToggle").setAttribute("aria-expanded", String(!p.hidden));
+});
+$("devCash").addEventListener("click", () => { data.cash += 1e6; render(); });
+$("devMass").addEventListener("click", () => { data.mass += 1e9; render(); toast("Height jumps, but the model stops at 12x size.", "success"); });
+$("devMassHuge").addEventListener("click", () => { data.mass += 1e15; render(); toast("The number keeps climbing. The model doesn't.", "success"); });
+let resetArmed = false;
+$("devReset").addEventListener("click", () => {
+  if (!resetArmed) { resetArmed = true; $("devReset").textContent = "Tap again to reset"; setTimeout(() => { resetArmed = false; $("devReset").textContent = "Reset progress"; }, 3000); return; }
+  data = freshData(); resetArmed = false; $("devReset").textContent = "Reset progress"; saveData(); render(); toast("Progress reset.");
+});
+
+// ---------------------------------------------------------------------------
+// Game actions (mirror the server checks in GameService.luau)
+// ---------------------------------------------------------------------------
+function buyFood(id) {
+  const food = FoodsById[id];
+  if (data.cash < food.price) { toast("Not enough cash.", "error"); return; }
+  data.cash -= food.price;
+  data.inventory[id] = (data.inventory[id] || 0) + 1;
+  render(); saveData();
+}
+function feedFood(id) {
+  const food = FoodsById[id];
+  if (!(data.inventory[id] > 0)) { toast("You don't have any " + food.name + ". Buy one first.", "error"); return; }
+  if (data.stomach.length >= Config.StomachSlots) { toast("Your Giant's stomach is full. Wait for it to digest!", "error"); return; }
+  data.inventory[id] -= 1;
+  if (data.inventory[id] <= 0) delete data.inventory[id];
+  data.stomach.push({ foodId: id, remaining: food.digestSeconds });
+  chomp = 1;
+  render(); saveData();
+}
+
+function render() {
+  const h = Growth.height(data.mass);
+  $("cash").textContent = fmtCash(data.cash);
+  $("income").textContent = "+" + fmtNum(Growth.income(h)) + "/s";
+  $("height").textContent = fmtHeight(h);
+  $("labelHeight").textContent = fmtHeight(h);
+  const full = data.stomach.length >= Config.StomachSlots;
+  for (const food of Config.Foods) {
+    const r = rows[food.id];
+    const count = data.inventory[food.id] || 0;
+    r.owned.textContent = `Owned: ${count} · ${fmtTime(food.digestSeconds)}`;
+    r.buy.classList.toggle("off", data.cash < food.price);
+    r.feed.classList.toggle("off", count === 0 || full);
+  }
+  slotEls.forEach((s, i) => {
+    const item = data.stomach[i];
+    const food = item && FoodsById[item.foodId];
+    if (food) {
+      s.el.classList.remove("empty");
+      s.name.textContent = food.name;
+      s.time.textContent = fmtTime(item.remaining);
+      s.fill.style.background = food.color;
+      s.fill.style.width = ((1 - item.remaining / food.digestSeconds) * 100).toFixed(1) + "%";
+    } else {
+      s.el.classList.add("empty");
+      s.name.textContent = "Empty"; s.time.textContent = ""; s.fill.style.width = "0";
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 3D scene
+// ---------------------------------------------------------------------------
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const canvas = $("scene");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x8fd0f5);
+scene.fog = new THREE.Fog(0x8fd0f5, 400, 1400);
+const camera = new THREE.PerspectiveCamera(50, 1, 0.5, 4000);
+
+scene.add(new THREE.HemisphereLight(0xcfe6ff, 0x4a6e3c, 0.6));
+const sun = new THREE.DirectionalLight(0xfff4e0, 0.75);
+sun.position.set(120, 260, 80);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -160, right: 160, top: 200, bottom: -60, near: 10, far: 700 });
+scene.add(sun);
+
+const mat = c => new THREE.MeshLambertMaterial({ color: c });
+function box(w, h, d, color, x, y, z, parent) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color));
+  m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true;
+  parent.add(m); return m;
+}
+
+// Ground and the ring of plots (8 plots on a 230-stud ring, like PlotService)
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), mat(0x4a8a40));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+const RING = 230, PLOT = 110;
+const myPlot = new THREE.Group();
+for (let i = 0; i < 8; i++) {
+  const a = i / 8 * Math.PI * 2;
+  const plot = box(PLOT, 1, PLOT, 0xbfa874, Math.cos(a) * RING, 0.5, Math.sin(a) * RING, scene);
+  plot.castShadow = false;
+  plot.lookAt(0, 0.5, 0);
+  if (i === 0) { myPlot.position.set(Math.cos(a) * RING, 1, Math.sin(a) * RING); myPlot.lookAt(0, 1, 0); }
+}
+scene.add(myPlot);
+
+// Trees and rocks for a sense of scale (each tree is ~12 studs tall)
+function tree(x, z, s) {
+  const g = new THREE.Group();
+  box(1.4 * s, 6 * s, 1.4 * s, 0x7a5232, 0, 3 * s, 0, g);
+  box(6 * s, 5 * s, 6 * s, 0x3e8a3e, 0, 8 * s, 0, g);
+  box(4 * s, 3 * s, 4 * s, 0x4c9c46, 0, 11.5 * s, 0, g);
+  g.position.set(x, 0, z); scene.add(g);
+}
+let seed = 7;
+const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+for (let i = 0; i < 70; i++) {
+  const a = rand() * Math.PI * 2, r = 120 + rand() * 520;
+  const x = Math.cos(a) * r, z = Math.sin(a) * r;
+  let onPlot = false;
+  for (let p = 0; p < 8; p++) { const pa = p / 8 * Math.PI * 2; if (Math.hypot(x - Math.cos(pa) * RING, z - Math.sin(pa) * RING) < 80) onPlot = true; }
+  if (!onPlot) tree(x, z, 0.8 + rand() * 0.6);
+}
+
+// The blocky Giant: same parts and proportions as buildGiantModel in PlotService.luau.
+// Its origin is at the feet, so scaling grows it upward from the plot.
+const giant = new THREE.Group();
+const shirt = 0x4f8fd8, pants = 0x2f5682, skin = 0xf0c8a0;
+box(1.4, 4, 1.4, pants, -0.8, 2, 0, giant);
+box(1.4, 4, 1.4, pants, 0.8, 2, 0, giant);
+const torso = box(3.2, 3.5, 1.8, shirt, 0, 5.75, 0, giant);
+const armL = box(1.1, 3.4, 1.1, skin, -2.2, 5.8, 0, giant);
+const armR = box(1.1, 3.4, 1.1, skin, 2.2, 5.8, 0, giant);
+const head = new THREE.Group(); head.position.set(0, 8.6, 0); giant.add(head);
+box(2.2, 2.2, 2.2, skin, 0, 0, 0, head);
+box(0.4, 0.4, 0.1, 0x1a1a1a, -0.5, 0.3, 1.12, head);
+box(0.4, 0.4, 0.1, 0x1a1a1a, 0.5, 0.3, 1.12, head);
+const mouth = box(0.9, 0.22, 0.1, 0x7a2e2e, 0, -0.45, 1.12, head);
+myPlot.add(giant);
+// The plot group faces the map center, so the Giant looks toward the middle of the map.
+
+let shownScale = Growth.visualScale(Growth.height(data.mass));
+
+// Camera orbits the Giant; drag to turn it. Distance follows the Giant's size.
+let yaw = -Math.PI / 2 + 0.35, pitch = 0.32, dragging = false, lastX = 0, lastY = 0, idleSince = 0;
+canvas.addEventListener("pointerdown", e => { dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener("pointermove", e => {
+  if (!dragging) return;
+  yaw -= (e.clientX - lastX) * 0.006;
+  pitch = Math.min(1.1, Math.max(0.05, pitch + (e.clientY - lastY) * 0.004));
+  lastX = e.clientX; lastY = e.clientY; idleSince = performance.now();
+});
+canvas.addEventListener("pointerup", () => { dragging = false; idleSince = performance.now(); });
+
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+window.addEventListener("resize", resize);
+resize();
+
+const labelEl = $("label");
+const tmp = new THREE.Vector3();
+const giantWorld = new THREE.Vector3();
+
+// ---------------------------------------------------------------------------
+// Loop: 1-second game ticks (like the server), smooth 3D every frame
+// ---------------------------------------------------------------------------
+function tick(dt) {
+  const [gained, left] = digest(data.stomach, dt);
+  data.mass += gained;
+  data.stomach = left;
+  data.cash += Growth.income(Growth.height(data.mass)) * dt;
+  render();
+}
+
+let lastTick = performance.now(), lastFrame = performance.now(), lastSave = Date.now();
+function frame(now) {
+  const dt = Math.min((now - lastFrame) / 1000, 0.1);
+  lastFrame = now;
+
+  if (now - lastTick >= 1000) { tick((now - lastTick) / 1000); lastTick = now; }
+  if (Date.now() - lastSave > 10000) { saveData(); lastSave = Date.now(); }
+
+  // Ease the model toward its target size so growth is visible but smooth.
+  const target = Growth.visualScale(Growth.height(data.mass));
+  shownScale += (target - shownScale) * Math.min(1, dt * 2.5);
+  giant.scale.setScalar(shownScale);
+
+  // Chomp and digest bob
+  chomp = Math.max(0, chomp - dt * 2);
+  const busy = data.stomach.length > 0;
+  const t = now / 1000;
+  const bob = reduceMotion ? 0 : (busy ? Math.sin(t * 6) * 0.08 : Math.sin(t * 1.6) * 0.04);
+  torso.scale.set(1 + (busy ? 0.04 : 0), 1, 1 + (busy ? 0.06 : 0));
+  head.position.y = 8.6 + bob;
+  mouth.scale.y = 1 + chomp * 3;
+  armL.rotation.x = reduceMotion ? 0 : Math.sin(t * 1.6) * 0.06;
+  armR.rotation.x = reduceMotion ? 0 : -Math.sin(t * 1.6) * 0.06;
+
+  if (!dragging && !reduceMotion && now - idleSince > 4000) yaw += dt * 0.08;
+
+  const giantHeight = 10.8 * shownScale;
+  const dist = 26 + giantHeight * 1.9;
+  giant.getWorldPosition(giantWorld);
+  const focus = tmp.set(giantWorld.x, giantHeight * 0.55, giantWorld.z);
+  const camTarget = new THREE.Vector3(
+    focus.x + Math.sin(yaw) * Math.cos(pitch) * dist,
+    Math.max(3, focus.y + Math.sin(pitch) * dist),
+    focus.z + Math.cos(yaw) * Math.cos(pitch) * dist
+  );
+  camera.position.lerp(camTarget, Math.min(1, dt * 3));
+  camera.lookAt(focus);
+
+  // Height label above the head (like the BillboardGui)
+  const top = new THREE.Vector3(giantWorld.x, giantHeight + 1.5 * shownScale, giantWorld.z).project(camera);
+  if (top.z < 1) {
+    labelEl.hidden = false;
+    // Keep the label clear of the stats bar at the top of the screen.
+    const ly = Math.max((-top.y * 0.5 + 0.5) * window.innerHeight, 130);
+    labelEl.style.transform = `translate(${(top.x * 0.5 + 0.5) * window.innerWidth}px, ${ly}px) translate(-50%, -100%)`;
+  } else labelEl.hidden = true;
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+// Catch up on digestion while the tab was closed (capped at 24h, like the server)
+function catchUp(showToast) {
+  const away = Math.min(Math.max((Date.now() - data.lastSeen) / 1000, 0), Config.MaxOfflineSeconds);
+  const [gained, left] = digest(data.stomach, away);
+  data.mass += gained; data.stomach = left; data.lastSeen = Date.now();
+  if (showToast && gained > 0.5) toast(`Welcome back! Your Giant digested ${fmtNum(gained)} mass while you were away.`, "success");
+}
+catchUp(true);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) saveData();
+  else { catchUp(true); lastTick = performance.now(); render(); }
+});
+window.addEventListener("pagehide", saveData);
+
+if (window.innerWidth > 760) { $("shop").classList.remove("collapsed"); $("shopHead").setAttribute("aria-expanded", "true"); $("chev").textContent = "Hide ▾"; }
+render();
+if (data.mass === 0 && data.stomach.length === 0 && !Object.keys(data.inventory).length) toast("Buy an Apple, then feed it to your Giant!");
+requestAnimationFrame(frame);
+})();
+</script>
