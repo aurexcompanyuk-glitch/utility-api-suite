@@ -1,0 +1,46 @@
+{
+  "name": "GrowAGiant",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Shared": {
+        "$path": "src/shared"
+      },
+      "Packages": {
+        "$path": {
+          "optional": "Packages"
+        }
+      },
+      "Remotes": {
+        "$className": "Folder",
+        "BuyFood": {
+          "$className": "RemoteEvent"
+        },
+        "FeedFood": {
+          "$className": "RemoteEvent"
+        },
+        "ClientReady": {
+          "$className": "RemoteEvent"
+        },
+        "StateSync": {
+          "$className": "RemoteEvent"
+        },
+        "Notify": {
+          "$className": "RemoteEvent"
+        }
+      }
+    },
+    "ServerScriptService": {
+      "Server": {
+        "$path": "src/server"
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "Client": {
+          "$path": "src/client"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+[package]
+name = "growagiant/grow-a-giant"
+version = "0.1.0"
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+
+# Phase 1 needs no third-party packages: data saving, remotes and UI are
+# written in-house so every line is readable. Add packages here in later
+# phases, then run `wally install`; they land in ReplicatedStorage.Packages.
+[dependencies]
