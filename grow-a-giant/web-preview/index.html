@@ -3,156 +3,181 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Rubik:wght@400;500;700&display=swap">
 <style>
-/* Layout: full-bleed 3D plot; HUD floats over it - stats top, shop right (bottom sheet on phones), stomach bottom. */
+/* Layout: full-bleed 3D world you walk around; HUD floats on top - stats top center, minimap top left,
+   leaderboard top right, stomach + backpack bottom center, station panels slide in on the right. */
 :root {
   color-scheme: dark;
-  --panel: rgba(24, 27, 44, 0.86);
-  --panel-raised: #2c3050;
+  --panel: rgba(22, 25, 42, 0.86);
+  --raised: #2c3052;
   --line: rgba(255, 255, 255, 0.10);
   --text: #f6f5fb;
   --muted: #a9adc6;
   --cash: #8ee87a;
+  --gold: #ffd84a;
   --buy: #3fae5f;
   --feed: #f08c32;
-  --off: #4a4d66;
+  --lab: #7a6cf0;
+  --off: #474a63;
   --bad: #e2574c;
   --sky: #8fd0f5;
   --font-display: "Lilita One", "Arial Rounded MT Bold", "Trebuchet MS", sans-serif;
   --font-body: "Rubik", "Segoe UI", system-ui, sans-serif;
 }
 html, body { height: 100%; }
-body {
-  margin: 0; overflow: hidden; background: var(--sky); color: var(--text);
-  font-family: var(--font-body); -webkit-font-smoothing: antialiased;
-}
-#scene { position: fixed; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
-#scene:active { cursor: grabbing; }
+[hidden] { display: none !important; }
+body { margin: 0; overflow: hidden; background: var(--sky); color: var(--text); font-family: var(--font-body); -webkit-font-smoothing: antialiased; user-select: none; -webkit-user-select: none; }
+#scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
 button { font: inherit; color: inherit; border: 0; cursor: pointer; }
 button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 
-.hud { position: fixed; inset: 0; pointer-events: none; padding: env(safe-area-inset-top, 0px) 16px env(safe-area-inset-bottom, 0px); }
-.hud > * { pointer-events: auto; }
+.hud { position: fixed; inset: 0; pointer-events: none; }
+.hud .live { pointer-events: auto; }
+.pad { position: absolute; }
 
 .stats {
-  position: absolute; top: calc(10px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 18px; padding: 8px 18px; border-radius: 16px;
-  background: var(--panel); backdrop-filter: blur(6px); box-shadow: 0 6px 20px rgba(0,0,0,.25);
-  white-space: nowrap; font-variant-numeric: tabular-nums; max-width: calc(100% - 32px);
+  top: calc(10px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 16px; padding: 7px 16px; border-radius: 16px; white-space: nowrap;
+  background: var(--panel); backdrop-filter: blur(6px); box-shadow: 0 6px 20px rgba(0,0,0,.25); font-variant-numeric: tabular-nums;
 }
 .stat { display: flex; flex-direction: column; line-height: 1.05; }
 .stat small { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
-.stat b { font-family: var(--font-display); font-weight: 400; font-size: 26px; }
+.stat b { font-family: var(--font-display); font-weight: 400; font-size: 25px; }
 #cash { color: var(--cash); }
 #income { font-size: 16px; color: var(--muted); }
 .sep { width: 1px; align-self: stretch; background: var(--line); }
 
-.toasts { position: absolute; top: calc(80px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); display: grid; gap: 6px; width: min(440px, calc(100% - 32px)); pointer-events: none; }
-.toast { padding: 9px 14px; border-radius: 10px; font-weight: 500; font-size: 14px; text-align: center; background: #3b67c9; box-shadow: 0 4px 14px rgba(0,0,0,.25); transition: opacity .4s, transform .4s; }
-.toast.error { background: var(--bad); }
-.toast.success { background: var(--buy); }
-.toast.out { opacity: 0; transform: translateY(-6px); }
+#minimap { top: calc(10px + env(safe-area-inset-top, 0px)); left: 16px; width: 150px; height: 150px; border-radius: 50%; background: rgba(22,25,42,.75); box-shadow: 0 6px 20px rgba(0,0,0,.25); border: 3px solid rgba(255,255,255,.25); }
 
-.shop {
-  position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
-  width: 330px; max-height: min(600px, calc(100% - 260px)); display: flex; flex-direction: column;
-  border-radius: 16px; background: var(--panel); backdrop-filter: blur(6px); box-shadow: 0 8px 26px rgba(0,0,0,.3);
-}
-.shop-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 8px; background: none; text-align: left; }
-.shop-head h2 { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: 22px; letter-spacing: .03em; }
-.shop-head .chev { display: none; color: var(--muted); }
-.food-list { overflow-y: auto; padding: 0 10px 10px; display: grid; gap: 6px; }
-.food { display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center; padding: 8px; border-radius: 12px; background: var(--panel-raised); }
-.swatch { width: 44px; height: 44px; border-radius: 50%; box-shadow: inset 0 -5px 0 rgba(0,0,0,.22), inset 0 4px 0 rgba(255,255,255,.25); }
-.food-info { min-width: 0; }
-.food-name { font-weight: 700; font-size: 15px; }
-.food-meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.food-btns { display: grid; gap: 4px; }
-.btn { min-width: 64px; padding: 5px 10px; border-radius: 8px; font-weight: 700; font-size: 13px; box-shadow: inset 0 -3px 0 rgba(0,0,0,.25); transition: filter .15s, transform .05s; }
-.btn:hover { filter: brightness(1.12); }
-.btn:active { transform: translateY(1px); }
-.btn.buy { background: var(--buy); }
-.btn.feed { background: var(--feed); }
-.btn.off { background: var(--off); color: var(--muted); }
+.board { top: calc(10px + env(safe-area-inset-top, 0px)); right: 16px; width: 210px; padding: 8px 10px 10px; border-radius: 14px; background: var(--panel); box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+.board h3, .stomach h3 { margin: 0 0 6px; font-size: 10px; letter-spacing: .14em; color: var(--muted); font-weight: 700; }
+.board ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.board li { display: grid; grid-template-columns: 18px 1fr auto; gap: 6px; padding: 3px 6px; border-radius: 6px; }
+.board li.me { background: rgba(255, 216, 74, .18); font-weight: 700; }
+.board li .r { color: var(--muted); }
+.board li:first-child .r { color: var(--gold); }
 
-.stomach {
-  position: absolute; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
-  padding: 8px 10px 10px; border-radius: 16px; background: var(--panel); backdrop-filter: blur(6px); box-shadow: 0 6px 20px rgba(0,0,0,.25);
-}
-.stomach h3 { margin: 0 0 6px; text-align: center; font-size: 10px; letter-spacing: .14em; color: var(--muted); font-weight: 700; }
-.slots { display: flex; gap: 6px; }
-.slot { position: relative; width: 112px; height: 50px; border-radius: 10px; background: var(--panel-raised); overflow: hidden; display: grid; place-content: center; text-align: center; }
-.slot .fill { position: absolute; inset: 0 auto 0 0; width: 0; opacity: .55; }
-.slot span { position: relative; font-weight: 700; font-size: 14px; }
-.slot small { position: relative; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.bottom { left: 50%; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); display: grid; gap: 6px; justify-items: center; }
+.bag { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-radius: 12px; background: var(--panel); font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bag-items { display: flex; gap: 4px; flex-wrap: wrap; max-width: 300px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px 2px 3px; border-radius: 99px; background: var(--raised); font-size: 12px; }
+.chip i { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+.stomach { padding: 8px 10px 10px; border-radius: 16px; background: var(--panel); box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+.stomach h3 { text-align: center; }
+.slots { display: flex; gap: 5px; flex-wrap: wrap; justify-content: center; max-width: 560px; }
+.slot { position: relative; width: 74px; height: 40px; border-radius: 9px; background: var(--raised); overflow: hidden; display: grid; place-content: center; text-align: center; }
+.slot .fill { position: absolute; inset: 0 auto 0 0; width: 0; opacity: .6; }
+.slot span { position: relative; font-weight: 700; font-size: 12px; }
 .slot.empty span { color: var(--muted); font-weight: 500; }
 
-.label3d {
-  position: absolute; left: 0; top: 0; transform: translate(-50%, -100%); pointer-events: none; text-align: center;
-  font-family: var(--font-display); font-size: 20px; line-height: 1.1; color: #fff;
-  text-shadow: 0 2px 0 rgba(0,0,0,.45), 0 0 8px rgba(0,0,0,.35); white-space: nowrap;
-}
-.label3d b { display: block; font-size: 26px; font-weight: 400; color: #ffe46b; }
+.toasts { top: calc(108px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); display: grid; gap: 6px; width: min(420px, calc(100% - 32px)); }
+.toast { padding: 8px 14px; border-radius: 10px; font-weight: 500; font-size: 14px; text-align: center; background: #3b67c9; box-shadow: 0 4px 14px rgba(0,0,0,.25); transition: opacity .4s, transform .4s; }
+.toast.error { background: var(--bad); } .toast.success { background: var(--buy); }
+.toast.out { opacity: 0; transform: translateY(-6px); }
 
-.dev { position: absolute; left: 16px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); display: grid; gap: 6px; justify-items: start; }
-.dev-toggle { padding: 6px 10px; border-radius: 8px; background: var(--panel); color: var(--muted); font-size: 12px; font-weight: 700; }
-.dev-panel { display: grid; gap: 6px; padding: 10px; border-radius: 12px; background: var(--panel); max-width: 220px; }
-.dev-panel p { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.35; }
-.dev-panel .btn { background: var(--panel-raised); text-align: left; }
-.offline-note { position: absolute; left: 16px; top: calc(12px + env(safe-area-inset-top, 0px)); font-size: 12px; color: rgba(20,30,50,.75); font-weight: 500; max-width: 170px; line-height: 1.3; }
+.banner { top: 26%; left: 50%; transform: translate(-50%, -50%) scale(.6); opacity: 0; text-align: center; white-space: nowrap; transition: transform .35s cubic-bezier(.2,1.6,.4,1), opacity .3s; }
+.banner.show { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+.banner b { display: block; font-family: var(--font-display); font-weight: 400; font-size: clamp(34px, 7vw, 64px); color: var(--gold); text-shadow: 0 4px 0 #9c6a00, 0 8px 18px rgba(0,0,0,.35); letter-spacing: .02em; }
+.banner span { font-weight: 700; font-size: 16px; text-shadow: 0 2px 6px rgba(0,0,0,.6); }
+
+.event { top: calc(70px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); padding: 5px 14px; border-radius: 99px; background: #2f8fd8; font-weight: 700; font-size: 13px; box-shadow: 0 4px 14px rgba(0,0,0,.25); white-space: nowrap; }
+
+.panel { right: 16px; top: 50%; transform: translateY(-50%); width: 330px; max-height: calc(100% - 300px); min-height: 200px; display: flex; flex-direction: column; border-radius: 16px; background: var(--panel); backdrop-filter: blur(6px); box-shadow: 0 8px 26px rgba(0,0,0,.3); }
+.panel header { padding: 12px 14px 4px; }
+.panel h2 { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: 24px; }
+.panel header p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+.list { overflow-y: auto; padding: 8px 10px 10px; display: grid; gap: 6px; }
+.row { display: grid; grid-template-columns: 40px 1fr auto; gap: 10px; align-items: center; padding: 7px 8px; border-radius: 12px; background: var(--raised); }
+.icon { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-family: var(--font-display); font-size: 18px; box-shadow: inset 0 -5px 0 rgba(0,0,0,.22), inset 0 4px 0 rgba(255,255,255,.25); }
+.info { min-width: 0; }
+.name { font-weight: 700; font-size: 14px; }
+.meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.btns { display: grid; gap: 4px; }
+.btn { min-width: 66px; padding: 5px 10px; border-radius: 8px; font-weight: 700; font-size: 12px; box-shadow: inset 0 -3px 0 rgba(0,0,0,.25); transition: filter .15s, transform .05s; }
+.btn:hover { filter: brightness(1.12); } .btn:active { transform: translateY(1px); }
+.btn.buy { background: var(--buy); } .btn.lab { background: var(--lab); } .btn.feed { background: var(--feed); }
+.btn.off { background: var(--off); color: var(--muted); }
+
+.label3d { position: absolute; left: 0; top: 0; pointer-events: none; text-align: center; white-space: nowrap; font-family: var(--font-display); color: #fff; text-shadow: 0 2px 0 rgba(0,0,0,.45), 0 0 8px rgba(0,0,0,.35); will-change: transform; }
+.label3d.giant { font-size: 16px; } .label3d.giant b { display: block; font-size: 22px; font-weight: 400; color: var(--gold); }
+.label3d.mine b { font-size: 28px; }
+.label3d.station { font-size: 20px; padding: 3px 10px; border-radius: 10px; background: rgba(22,25,42,.7); text-shadow: none; }
+.label3d.station small { display: block; font-family: var(--font-body); font-size: 11px; color: var(--muted); font-weight: 500; }
+.pop { position: absolute; left: 0; top: 0; pointer-events: none; font-family: var(--font-display); font-size: 22px; white-space: nowrap; text-shadow: 0 2px 0 rgba(0,0,0,.5); }
+
+.help { left: 16px; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); font-size: 12px; color: rgba(255,255,255,.92); line-height: 1.45; text-shadow: 0 1px 3px rgba(0,0,0,.6); max-width: 220px; }
+.help kbd { font-family: var(--font-body); font-weight: 700; padding: 0 5px; border-radius: 4px; background: rgba(22,25,42,.7); }
+
+.joy { width: 120px; height: 120px; border-radius: 50%; background: rgba(255,255,255,.12); border: 2px solid rgba(255,255,255,.35); transform: translate(-50%, -50%); }
+.joy i { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%; background: rgba(255,255,255,.55); }
+.jump { right: 22px; bottom: calc(150px + env(safe-area-inset-bottom, 0px)); width: 78px; height: 78px; border-radius: 50%; background: rgba(22,25,42,.75); border: 2px solid rgba(255,255,255,.35); font-family: var(--font-display); font-size: 18px; }
+
+.devbtn { right: 16px; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); padding: 5px 10px; border-radius: 8px; background: var(--panel); color: var(--muted); font-size: 12px; font-weight: 700; }
+.devpanel { right: 16px; bottom: calc(48px + env(safe-area-inset-bottom, 0px)); display: grid; gap: 6px; padding: 10px; border-radius: 12px; background: var(--panel); width: 190px; }
+.devpanel p { margin: 0; font-size: 12px; color: var(--muted); }
+.devpanel .btn { background: var(--raised); text-align: left; }
 
 @media (max-width: 760px) {
-  .stats { gap: 10px; padding: 6px 12px; }
-  .stat b { font-size: 20px; }
-  #income { font-size: 13px; }
-  .offline-note { display: none; }
-  .shop { top: auto; transform: none; left: 16px; right: 16px; width: auto; bottom: calc(96px + env(safe-area-inset-bottom, 0px)); max-height: 46%; }
-  .shop.collapsed .food-list { display: none; }
-  .shop-head { width: 100%; }
-  .shop-head .chev { display: inline; }
-  .stomach { width: calc(100% - 32px); box-sizing: border-box; }
-  .slots { justify-content: space-between; }
-  .slot { width: auto; flex: 1; min-width: 0; height: 44px; }
-  .slot span { font-size: 12px; }
-  .dev { bottom: auto; top: calc(70px + env(safe-area-inset-top, 0px)); }
-  .label3d { font-size: 15px; } .label3d b { font-size: 20px; }
+  .stats { gap: 9px; padding: 6px 10px; } .stat b { font-size: 19px; } #income { font-size: 13px; }
+  #minimap { width: 92px; height: 92px; top: calc(62px + env(safe-area-inset-top, 0px)); }
+  .board { width: 150px; top: calc(62px + env(safe-area-inset-top, 0px)); padding: 6px 8px; }
+  .board li { font-size: 11px; padding: 2px 4px; grid-template-columns: 14px 1fr auto; }
+  .board li:nth-child(n+5):not(.me) { display: none; }
+  .panel { left: 16px; right: 16px; width: auto; top: calc(62px + env(safe-area-inset-top, 0px)); transform: none; max-height: 44%; min-height: 0; }
+  .slot { width: 58px; height: 34px; } .slot span { font-size: 11px; }
+  .bag { font-size: 12px; } .bag-items { max-width: 220px; }
+  .help { display: none; }
+  .event { top: calc(166px + env(safe-area-inset-top, 0px)); }
+  .toasts { top: calc(196px + env(safe-area-inset-top, 0px)); }
+  .devbtn { top: calc(168px + env(safe-area-inset-top, 0px)); bottom: auto; }
+  .devpanel { top: calc(200px + env(safe-area-inset-top, 0px)); bottom: auto; }
 }
-@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .toast, .banner { transition: none; } }
 </style>
 
-<canvas id="scene" aria-label="Your Giant standing on its plot. Drag to look around."></canvas>
-<div class="hud">
-  <div class="label3d" id="label"><span id="labelName">Your Giant</span><b id="labelHeight">10.0m</b></div>
+<canvas id="scene" aria-label="Grow a Giant 3D world. Walk with WASD or arrow keys, jump with Space, drag to turn the camera."></canvas>
+<div class="hud" id="hud">
+  <div id="labels"></div>
 
-  <div class="stats" role="status" aria-live="off">
-    <div class="stat"><small>Cash</small><b id="cash">$50</b></div>
+  <div class="pad stats" role="status">
+    <div class="stat"><small>Cash</small><b id="cash">$0</b></div>
     <div class="stat"><small>Income</small><b id="income">+1/s</b></div>
     <span class="sep"></span>
-    <div class="stat"><small>Height</small><b id="height">10.0m</b></div>
+    <div class="stat"><small>Your Giant</small><b id="height">10.0m</b></div>
   </div>
 
-  <p class="offline-note">Food keeps digesting while this tab is closed, for up to 24 hours.</p>
+  <canvas class="pad" id="minimap" width="300" height="300" aria-label="Minimap"></canvas>
 
-  <div class="toasts" id="toasts" aria-live="polite"></div>
-
-  <section class="shop collapsed" id="shop" aria-label="Food shop">
-    <button class="shop-head" id="shopHead" aria-expanded="false"><h2>Food Shop</h2><span class="chev" id="chev">Show ▴</span></button>
-    <div class="food-list" id="foodList"></div>
+  <section class="pad board" aria-label="Tallest Giants">
+    <h3>TALLEST GIANTS</h3>
+    <ol id="board"></ol>
   </section>
 
-  <section class="stomach" aria-label="Stomach">
-    <h3>STOMACH</h3>
-    <div class="slots" id="slots"></div>
+  <div class="pad event" id="event" hidden></div>
+  <div class="pad toasts" id="toasts" aria-live="polite"></div>
+  <div class="pad banner" id="banner"><b id="bannerBig"></b><span id="bannerSmall"></span></div>
+
+  <section class="pad panel live" id="panel" hidden aria-live="polite">
+    <header><h2 id="panelTitle"></h2><p id="panelSub"></p></header>
+    <div class="list" id="panelList"></div>
   </section>
 
-  <div class="dev">
-    <div class="dev-panel" id="devPanel" hidden>
-      <p>Test tools, same as the Studio-only cheat. Use them to see the size cap.</p>
-      <button class="btn" id="devCash">+ $1M cash</button>
-      <button class="btn" id="devMass">+ 1 billion mass</button>
-      <button class="btn" id="devMassHuge">+ 1e15 mass</button>
-      <button class="btn" id="devReset">Reset progress</button>
-    </div>
-    <button class="dev-toggle" id="devToggle" aria-expanded="false">Test tools</button>
+  <div class="pad bottom">
+    <div class="bag live"><span id="bagCount">Backpack 0/10</span><span class="bag-items" id="bagItems"></span></div>
+    <section class="stomach" aria-label="Stomach"><h3>STOMACH</h3><div class="slots" id="slots"></div></section>
+  </div>
+
+  <p class="pad help" id="help"><kbd>WASD</kbd> walk · <kbd>Space</kbd> jump · drag to look<br>Buy food at the <b>Market</b>, grab free food in the <b>Orchard</b>, carry it to the <b>Feeding Pad</b>.</p>
+
+  <div class="pad joy" id="joy" hidden><i id="joyKnob"></i></div>
+  <button class="pad jump live" id="jumpBtn" hidden>JUMP</button>
+
+  <button class="pad devbtn live" id="devBtn" aria-expanded="false">Test tools</button>
+  <div class="pad devpanel live" id="devPanel" hidden>
+    <p>For testing only.</p>
+    <button class="btn" id="devCash">+ $1M cash</button>
+    <button class="btn" id="devMass">+ 1 billion mass</button>
+    <button class="btn" id="devRain">Start Food Rain</button>
+    <button class="btn" id="devReset">Reset progress</button>
   </div>
 </div>
 
@@ -161,392 +186,1004 @@ button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 (function () {
 "use strict";
 
-// ---------------------------------------------------------------------------
-// Same numbers as src/shared/Config.luau and GrowthMath.luau in the Roblox game
-// ---------------------------------------------------------------------------
-const Config = {
-  StartingCash: 50,
-  StomachSlots: 4,
-  MaxOfflineSeconds: 24 * 60 * 60,
-  Foods: [
-    { id: "apple", name: "Apple", price: 10, mass: 10, digestSeconds: 15, color: "#dc3c3c" },
-    { id: "bread", name: "Bread", price: 60, mass: 70, digestSeconds: 30, color: "#d6aa64" },
-    { id: "burger", name: "Burger", price: 400, mass: 520, digestSeconds: 60, color: "#a05a28" },
-    { id: "pizza", name: "Pizza", price: 2500, mass: 3600, digestSeconds: 100, color: "#f0b43c" },
-    { id: "cake", name: "Cake", price: 15000, mass: 24000, digestSeconds: 160, color: "#f5a0c8" },
-    { id: "turkey", name: "Turkey", price: 100000, mass: 180000, digestSeconds: 240, color: "#be6e32" },
-    { id: "goldsteak", name: "Golden Steak", price: 750000, mass: 1500000, digestSeconds: 360, color: "#ffd700" },
-  ],
-};
-const FoodsById = Object.fromEntries(Config.Foods.map(f => [f.id, f]));
+// ===========================================================================
+// Tuning
+// ===========================================================================
+const FOODS = [
+  { id: "apple", name: "Apple", price: 5, mass: 10, digest: 3, color: "#e0413b" },
+  { id: "bread", name: "Bread", price: 30, mass: 70, digest: 4, color: "#d9a85e" },
+  { id: "burger", name: "Burger", price: 200, mass: 520, digest: 6, color: "#a9612c" },
+  { id: "pizza", name: "Pizza", price: 1200, mass: 3600, digest: 8, color: "#f2b53a" },
+  { id: "cake", name: "Cake", price: 8000, mass: 24000, digest: 11, color: "#f59ac6" },
+  { id: "turkey", name: "Turkey", price: 50000, mass: 180000, digest: 15, color: "#c0743a" },
+  { id: "goldsteak", name: "Golden Steak", price: 350000, mass: 1500000, digest: 20, color: "#ffd700" },
+  { id: "galaxy", name: "Galaxy Donut", price: 2.5e6, mass: 1.2e7, digest: 26, color: "#8a5cff" },
+];
+const FOOD = Object.fromEntries(FOODS.map((f, i) => [f.id, Object.assign(f, { tier: i })]));
+
+const UPGRADES = [
+  { id: "bag", name: "Bigger Backpack", icon: "B", color: "#3f8fd8", base: 60, growth: 2.1, max: 15, text: l => `Carry ${10 + 5 * l} → ${15 + 5 * l} items` },
+  { id: "slots", name: "Stretchy Stomach", icon: "S", color: "#f08c32", base: 120, growth: 2.6, max: 8, text: l => `${4 + l} → ${5 + l} stomach slots` },
+  { id: "digest", name: "Turbo Digestion", icon: "D", color: "#e2574c", base: 90, growth: 2.2, max: 20, text: l => `Digest ${(1 + .3 * l).toFixed(1)}x → ${(1.3 + .3 * l).toFixed(1)}x speed` },
+  { id: "coin", name: "Golden Sweat", icon: "$", color: "#d9b21a", base: 150, growth: 2.3, max: 25, text: l => `Coins worth ${(1 + .4 * l).toFixed(1)}x → ${(1.4 + .4 * l).toFixed(1)}x` },
+  { id: "speed", name: "Running Shoes", icon: "R", color: "#3fae5f", base: 80, growth: 2.0, max: 10, text: l => `Run ${(18 * (1 + .12 * l)).toFixed(0)} → ${(18 * (1 + .12 * (l + 1))).toFixed(0)} speed` },
+  { id: "magnet", name: "Coin Magnet", icon: "M", color: "#c94fd8", base: 200, growth: 2.4, max: 10, text: l => `Pull coins from ${6 + 3 * l} → ${9 + 3 * l} studs` },
+];
+const UP = Object.fromEntries(UPGRADES.map(u => [u.id, u]));
+const upCost = (u, lvl) => Math.round(u.base * Math.pow(u.growth, lvl));
 
 const Growth = {
-  BaseHeight: 10, HeightPerLog: 25, MassScale: 100,
-  MaxVisualScale: 12, VisualSoftness: 150,
-  BaseIncome: 1, IncomeExponent: 2,
-  height(mass) { return this.BaseHeight + this.HeightPerLog * Math.log(1 + Math.max(mass, 0) / this.MassScale); },
-  visualScale(h) { const g = Math.max(h - this.BaseHeight, 0); return 1 + (this.MaxVisualScale - 1) * (1 - Math.exp(-g / this.VisualSoftness)); },
-  income(h) { return this.BaseIncome * Math.pow(Math.max(h, this.BaseHeight) / this.BaseHeight, this.IncomeExponent); },
+  height: m => 10 + 25 * Math.log(1 + Math.max(m, 0) / 100),
+  scale: h => 1 + 11 * (1 - Math.exp(-Math.max(h - 10, 0) / 150)),
+  income: h => Math.pow(Math.max(h, 10) / 10, 2),
 };
+const MILESTONES = [15, 20, 30, 40, 50, 75, 100, 125, 150, 200, 250, 300, 400, 500, 750, 1000];
+const RAIN_EVERY = 75, RAIN_LENGTH = 14, FIRST_RAIN = 35;
 
-function digest(stomach, seconds) {
-  let gained = 0; const left = [];
-  seconds = Math.max(seconds, 0);
-  for (const item of stomach) {
-    const food = FoodsById[item.foodId];
-    if (!food) continue;
-    const step = Math.min(seconds, item.remaining);
-    gained += food.mass * (step / food.digestSeconds);
-    const remaining = item.remaining - step;
-    if (remaining > 1e-6) left.push({ foodId: item.foodId, remaining });
-  }
-  return [gained, left];
-}
-
-// Same formatting as src/shared/Format.luau
-const SUFFIXES = ["", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc"];
+// ===========================================================================
+// Formatting
+// ===========================================================================
+const SUF = ["", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc"];
 function fmtNum(n) {
-  if (n !== n) return "0";
+  if (!isFinite(n)) return "0";
   const sign = n < 0 ? "-" : ""; n = Math.abs(n);
   if (n < 1000) return sign + Math.floor(n);
-  const tier = Math.min(Math.floor(Math.log10(n) / 3), SUFFIXES.length - 1);
-  const s = n / Math.pow(10, tier * 3);
-  let t = s >= 100 ? String(Math.floor(s)) : s >= 10 ? (Math.floor(s * 10) / 10).toFixed(1) : (Math.floor(s * 100) / 100).toFixed(2);
-  if (t.includes(".")) t = t.replace(/0+$/, "").replace(/\.$/, "");
-  return sign + t + SUFFIXES[tier + 1];
+  const t = Math.min(Math.floor(Math.log10(n) / 3), SUF.length - 1);
+  const s = n / Math.pow(10, t * 3);
+  let x = s >= 100 ? String(Math.floor(s)) : s >= 10 ? (Math.floor(s * 10) / 10).toFixed(1) : (Math.floor(s * 100) / 100).toFixed(2);
+  if (x.includes(".")) x = x.replace(/0+$/, "").replace(/\.$/, "");
+  return sign + x + SUF[t + 1];
 }
 const fmtCash = n => "$" + fmtNum(n);
-const fmtHeight = m => m < 1000 ? m.toFixed(1) + "m" : fmtNum(m) + "m";
-function fmtTime(s) {
-  s = Math.max(0, Math.ceil(s));
-  if (s < 60) return s + "s";
-  const m = Math.floor(s / 60);
-  if (m < 60) return m + "m " + String(s % 60).padStart(2, "0") + "s";
-  return Math.floor(m / 60) + "h " + String(m % 60).padStart(2, "0") + "m";
-}
+const fmtH = m => m < 1000 ? m.toFixed(1) + "m" : fmtNum(m) + "m";
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 // Save data (this browser only)
-// ---------------------------------------------------------------------------
-const SAVE_KEY = "grow-a-giant-v1";
-function freshData() { return { cash: Config.StartingCash, mass: 0, inventory: {}, stomach: [], lastSeen: Date.now() }; }
-function loadData() {
+// ===========================================================================
+const SAVE_KEY = "grow-a-giant-v2";
+function fresh() {
+  return { cash: 25, mass: 0, bag: {}, stomach: [], up: { bag: 0, slots: 0, digest: 0, coin: 0, speed: 0, magnet: 0 }, playTime: 0, best: 0, lastSeen: Date.now(), tutorial: true };
+}
+function load() {
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
-    if (!raw) return null;
-    const d = JSON.parse(raw);
-    const base = freshData();
-    for (const k in base) if (d[k] !== undefined && typeof d[k] === typeof base[k]) base[k] = d[k];
-    return base;
+    const d = JSON.parse(localStorage.getItem(SAVE_KEY) || "null");
+    if (!d) return null;
+    const b = fresh();
+    for (const k in b) if (d[k] !== undefined && typeof d[k] === typeof b[k]) b[k] = d[k];
+    b.up = Object.assign(fresh().up, d.up || {});
+    return b;
   } catch (e) { return null; }
 }
-function saveData() {
-  data.lastSeen = Date.now();
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch (e) { /* storage blocked: play without saving */ }
-}
-
-let chomp = 0; // mouth animation, set when the Giant eats
+function save() { S.lastSeen = Date.now(); try { localStorage.setItem(SAVE_KEY, JSON.stringify(S)); } catch (e) {} }
 
 const hot = window.claude && window.claude.hot;
-let data = (hot && hot.data && hot.data.game) || loadData() || freshData();
-if (hot && hot.snapshot) hot.snapshot(() => ({ game: data }));
+let S = (hot && hot.data && hot.data.S) || load() || fresh();
+if (hot && hot.snapshot) hot.snapshot(() => ({ S }));
 
-// ---------------------------------------------------------------------------
-// HUD
-// ---------------------------------------------------------------------------
+const bagCap = () => 10 + 5 * S.up.bag;
+const slotCap = () => 4 + S.up.slots;
+const digestMult = () => 1 + 0.3 * S.up.digest;
+const coinMult = () => 1 + 0.4 * S.up.coin;
+const runSpeed = () => 18 * (1 + 0.12 * S.up.speed);
+const magnetR = () => 6 + 3 * S.up.magnet;
+const bagCount = () => Object.values(S.bag).reduce((a, b) => a + b, 0);
+const myHeight = () => Growth.height(S.mass);
+
+function digest(dt) {
+  let gained = 0; const left = [];
+  for (const it of S.stomach) {
+    const f = FOOD[it.id]; if (!f) continue;
+    const step = Math.min(dt, it.left);
+    gained += f.mass * step / f.digest;
+    if (it.left - step > 1e-6) left.push({ id: it.id, left: it.left - step });
+  }
+  S.stomach = left;
+  return gained;
+}
+
+// ===========================================================================
+// DOM helpers
+// ===========================================================================
 const $ = id => document.getElementById(id);
-const toastsEl = $("toasts");
 function toast(msg, kind) {
   const el = document.createElement("div");
-  el.className = "toast " + (kind || "");
-  el.textContent = msg;
-  toastsEl.appendChild(el);
-  while (toastsEl.children.length > 3) toastsEl.firstChild.remove();
-  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 400); }, 3200);
+  el.className = "toast " + (kind || ""); el.textContent = msg;
+  $("toasts").appendChild(el);
+  while ($("toasts").children.length > 3) $("toasts").firstChild.remove();
+  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 400); }, 2800);
+}
+let lastWarn = 0;
+function warnOnce(msg) { const n = performance.now(); if (n - lastWarn > 2500) { lastWarn = n; toast(msg, "error"); } }
+let bannerTimer = 0;
+function banner(big, small) {
+  $("bannerBig").textContent = big; $("bannerSmall").textContent = small || "";
+  $("banner").classList.add("show"); clearTimeout(bannerTimer);
+  bannerTimer = setTimeout(() => $("banner").classList.remove("show"), 2600);
 }
 
-const rows = {};
-for (const food of Config.Foods) {
-  const row = document.createElement("div");
-  row.className = "food";
-  row.innerHTML =
-    `<div class="swatch" style="background:${food.color}"></div>
-     <div class="food-info">
-       <div class="food-name">${food.name}</div>
-       <div class="food-meta">${fmtCash(food.price)} · +${fmtNum(food.mass)} mass</div>
-       <div class="food-meta" data-owned>Owned: 0 · ${fmtTime(food.digestSeconds)}</div>
-     </div>
-     <div class="food-btns">
-       <button class="btn buy" id="buy-${food.id}">Buy</button>
-       <button class="btn feed" id="feed-${food.id}">Feed</button>
-     </div>`;
-  $("foodList").appendChild(row);
-  rows[food.id] = { owned: row.querySelector("[data-owned]"), buy: row.querySelector(".buy"), feed: row.querySelector(".feed") };
-  rows[food.id].buy.addEventListener("click", () => buyFood(food.id));
-  rows[food.id].feed.addEventListener("click", () => feedFood(food.id));
+// ===========================================================================
+// Three.js world
+// ===========================================================================
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const canvas = $("scene");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x8fd0f5);
+scene.fog = new THREE.Fog(0x8fd0f5, 220, 900);
+const camera = new THREE.PerspectiveCamera(60, 1, 0.3, 3000);
+
+scene.add(new THREE.HemisphereLight(0xd6ecff, 0x4a6e3c, 0.62));
+const sun = new THREE.DirectionalLight(0xfff2dc, 0.8);
+sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -110, right: 110, top: 110, bottom: -110, near: 1, far: 600 });
+scene.add(sun); scene.add(sun.target);
+
+const matCache = {};
+const mat = (c, emissive) => {
+  const k = c + "|" + (emissive || 0);
+  return matCache[k] || (matCache[k] = new THREE.MeshLambertMaterial({ color: c, emissive: emissive || 0 }));
+};
+const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+function box(w, h, d, c, x, y, z, parent, opts) {
+  const m = new THREE.Mesh(boxGeo, mat(c, opts && opts.emissive));
+  m.scale.set(w, h, d); m.position.set(x, y, z);
+  m.castShadow = !(opts && opts.noShadow); m.receiveShadow = true;
+  (parent || scene).add(m); return m;
 }
+function cyl(rt, rb, h, c, x, y, z, parent, seg, opts) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg || 20), mat(c, opts && opts.emissive));
+  m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true;
+  (parent || scene).add(m); return m;
+}
+
+// Colliders: circles the player can't walk through. {x, z, r, fn?} (fn returns live radius)
+const colliders = [];
+
+// ---- Ground, paths, boundary -------------------------------------------------
+const WORLD_R = 300;
+const ground = new THREE.Mesh(new THREE.CircleGeometry(1400, 64), mat(0x4f9444));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+function path(x1, z1, x2, z2, w) {
+  const len = Math.hypot(x2 - x1, z2 - z1);
+  const p = box(w, 0.12, len, 0xcdb98a, (x1 + x2) / 2, 0.06, (z1 + z2) / 2, scene, { noShadow: true });
+  p.rotation.y = Math.atan2(x2 - x1, z2 - z1);
+}
+// Plaza in the middle where you spawn
+const plaza = cyl(18, 18, 0.2, 0xd9c79a, 0, 0.1, 0, scene, 40); plaza.castShadow = false;
+path(0, 0, 0, -62, 8);     // to your Giant
+path(0, 0, -38, 10, 6);    // to Market
+path(0, 0, 38, 10, 6);     // to Lab
+path(0, 0, 0, 44, 6);      // to Orchard
+// Fountain on the plaza
+cyl(5, 5.5, 1.2, 0x9aa3b5, 0, 0.6, 0); cyl(4.3, 4.3, 0.2, 0x4aa8e8, 0, 1.15, 0, scene, 30, { emissive: 0x0a2a44 });
+cyl(0.6, 0.8, 4, 0x9aa3b5, 0, 2.2, 0); const fountainTop = cyl(1.6, 1, 0.6, 0x9aa3b5, 0, 4.3, 0);
+colliders.push({ x: 0, z: 0, r: 5.6 });
+// Boundary hills
+for (let i = 0; i < 46; i++) {
+  const a = i / 46 * Math.PI * 2, r = WORLD_R + 25 + Math.sin(i * 2.3) * 10;
+  const h = 25 + (i * 37 % 30);
+  const hill = cyl(0, 30 + (i * 13 % 14), h, i % 2 ? 0x3f7f3a : 0x4a8a40, Math.cos(a) * r, h / 2 - 2, Math.sin(a) * r, scene, 6);
+  hill.rotation.y = i;
+}
+
+// ---- Clouds ------------------------------------------------------------------
+const clouds = [];
+for (let i = 0; i < 14; i++) {
+  const g = new THREE.Group();
+  for (let j = 0; j < 4; j++) box(14 + j * 3, 5, 10 + j * 2, 0xffffff, j * 7 - 10, (j % 2) * 2, (j % 3) * 3, g, { noShadow: true });
+  g.position.set((i * 97 % 700) - 350, 120 + (i * 31 % 50), (i * 61 % 700) - 350);
+  g.userData.speed = 2 + (i % 4);
+  scene.add(g); clouds.push(g);
+}
+
+// ---- Text labels projected from 3D --------------------------------------------
+const labels = [];
+function addLabel(cls, html, getPos, maxDist) {
+  const el = document.createElement("div");
+  el.className = "label3d " + cls; el.innerHTML = html;
+  $("labels").appendChild(el);
+  const l = { el, getPos, maxDist: maxDist || 260 }; labels.push(l); return l;
+}
+
+// ---- Giants --------------------------------------------------------------------
+function makeGiant(shirt, pants, skin) {
+  const g = new THREE.Group();
+  const P = {};
+  P.legL = new THREE.Group(); P.legL.position.set(-0.8, 4, 0); g.add(P.legL); box(1.4, 4, 1.4, pants, 0, -2, 0, P.legL);
+  P.legR = new THREE.Group(); P.legR.position.set(0.8, 4, 0); g.add(P.legR); box(1.4, 4, 1.4, pants, 0, -2, 0, P.legR);
+  P.torso = box(3.2, 3.5, 1.8, shirt, 0, 5.75, 0, g);
+  box(3.3, 0.5, 1.9, 0x3a2a1a, 0, 4.2, 0, g); // belt
+  P.armL = new THREE.Group(); P.armL.position.set(-2.2, 7.3, 0); g.add(P.armL); box(1.1, 3.4, 1.1, skin, 0, -1.6, 0, P.armL);
+  P.armR = new THREE.Group(); P.armR.position.set(2.2, 7.3, 0); g.add(P.armR); box(1.1, 3.4, 1.1, skin, 0, -1.6, 0, P.armR);
+  P.head = new THREE.Group(); P.head.position.set(0, 8.6, 0); g.add(P.head);
+  box(2.2, 2.2, 2.2, skin, 0, 0, 0, P.head);
+  box(0.42, 0.42, 0.1, 0x1a1a1a, -0.5, 0.3, 1.12, P.head); box(0.42, 0.42, 0.1, 0x1a1a1a, 0.5, 0.3, 1.12, P.head);
+  P.mouth = box(0.9, 0.22, 0.1, 0x6e2626, 0, -0.45, 1.12, P.head);
+  box(2.3, 0.5, 2.3, 0x4a3020, 0, 1.2, 0, P.head); // hair
+  P.crown = new THREE.Group(); P.crown.position.y = 1.7; P.head.add(P.crown);
+  box(1.8, 0.5, 1.8, 0xffd23a, 0, 0, 0, P.crown, { emissive: 0x553300 });
+  for (const [x, z] of [[-0.7, -0.7], [0.7, -0.7], [-0.7, 0.7], [0.7, 0.7], [0, 0.8], [0, -0.8], [0.8, 0], [-0.8, 0]]) box(0.3, 0.6, 0.3, 0xffd23a, x, 0.5, z, P.crown, { emissive: 0x553300 });
+  P.crown.visible = false;
+  P.group = g; P.shown = 1; P.chomp = 0; P.stomp = 0;
+  return P;
+}
+
+// Your Giant, on your plot north of the plaza
+const MY_POS = new THREE.Vector3(0, 0.3, -84);
+const myPlot = box(56, 0.6, 46, 0xbfa874, MY_POS.x, 0, MY_POS.z - 4, scene, { noShadow: true });
+for (const [x, z, w, d] of [[-28, 0, 0.6, 46], [28, 0, 0.6, 46], [0, -23, 56, 0.6]]) box(w, 1.6, d, 0xffffff, MY_POS.x + x, 0.8, MY_POS.z - 4 + z, scene);
+const me = makeGiant(0x4f8fd8, 0x2f5682, 0xf0c8a0);
+me.group.position.copy(MY_POS); scene.add(me.group);
+colliders.push({ x: MY_POS.x, z: MY_POS.z, fn: () => 2.6 * me.shown });
+const myLabel = addLabel("giant mine", `Your Giant<b id="myH">10.0m</b>`, () => new THREE.Vector3(MY_POS.x, 12.5 * me.shown + 2, MY_POS.z), 600);
+
+// Rival Giants (computer-controlled, clearly marked as bots)
+const RIVALS = [
+  { name: "Stompy", rate: 0.02, shirt: 0xd84f4f, x: -150, z: -150 },
+  { name: "Munch", rate: 0.1, shirt: 0x4fd88a, x: 150, z: -150 },
+  { name: "Big Tim", rate: 0.4, shirt: 0xd8a24f, x: -205, z: 20 },
+  { name: "Chonk", rate: 1.5, shirt: 0xa24fd8, x: 205, z: 20 },
+  { name: "Titan", rate: 5, shirt: 0x4fc6d8, x: 0, z: -230 },
+];
+for (const r of RIVALS) {
+  box(46, 0.6, 46, 0xbfa874, r.x, 0, r.z, scene, { noShadow: true });
+  r.g = makeGiant(r.shirt, 0x333344, 0xe8c09a);
+  r.g.group.position.set(r.x, 0.3, r.z);
+  r.g.group.lookAt(0, 0.3, 0);
+  scene.add(r.g.group);
+  colliders.push({ x: r.x, z: r.z, fn: () => 2.6 * r.g.shown });
+  r.label = addLabel("giant", `${r.name} <small>(bot)</small><b>10m</b>`, () => new THREE.Vector3(r.x, 12.5 * r.g.shown + 2, r.z), 700);
+  r.hb = r.label.el.querySelector("b");
+}
+const rivalHeight = r => 10 + 25 * Math.log(1 + (S.playTime * r.rate * 60) / 100);
+
+// ---- Stations --------------------------------------------------------------------
+const stations = [];
+function zoneRing(x, z, r, color) {
+  const ring = new THREE.Mesh(new THREE.RingGeometry(r - 0.6, r, 40), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, side: THREE.DoubleSide }));
+  ring.rotation.x = -Math.PI / 2; ring.position.set(x, 0.18, z); scene.add(ring);
+  const fill = new THREE.Mesh(new THREE.CircleGeometry(r - 0.6, 40), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.18 }));
+  fill.rotation.x = -Math.PI / 2; fill.position.set(x, 0.16, z); scene.add(fill);
+  return ring;
+}
+
+// Food Market: striped stall with crates
+const MARKET = { x: -40, z: 10 };
+{
+  const g = new THREE.Group(); g.position.set(MARKET.x - 8, 0, MARKET.z); g.rotation.y = Math.PI / 2; scene.add(g);
+  box(14, 3, 3, 0x8a5a32, 0, 1.5, 3, g);                              // counter
+  box(14, 0.4, 3.4, 0xe9d3a8, 0, 3.1, 3, g);
+  for (const x of [-6.6, 6.6]) for (const z of [-3, 4.4]) box(0.5, 8, 0.5, 0x6b4426, x, 4, z, g);
+  for (let i = 0; i < 7; i++) {
+    const s = box(2, 0.5, 9, i % 2 ? 0xffffff : 0xe2574c, -6 + i * 2, 8.4, 0.7, g);
+    s.rotation.x = -0.18;
+  }
+  box(14, 7, 0.5, 0x9a6a3c, 0, 3.5, -3.2, g);                          // back wall
+  FOODS.slice(0, 6).forEach((f, i) => box(1.6, 1.2, 1.6, f.color, -5 + i * 2, 3.9, 3, g));
+  for (const [x, z] of [[-9, 4], [9, 5], [-9.5, 6.5]]) box(2.4, 2.4, 2.4, 0xb98a52, x, 1.2, z, g);
+  colliders.push({ x: MARKET.x - 9, z: MARKET.z, r: 8 });
+}
+stations.push({ id: "market", x: MARKET.x, z: MARKET.z, r: 6, ring: zoneRing(MARKET.x, MARKET.z, 6, 0x3fae5f) });
+addLabel("station", `FOOD MARKET<small>Buy food here</small>`, () => new THREE.Vector3(MARKET.x - 8, 12, MARKET.z));
+
+// Upgrade Lab: building with spinning dome ring
+const LAB = { x: 40, z: 10 };
+let labRing;
+{
+  const g = new THREE.Group(); g.position.set(LAB.x + 10, 0, LAB.z); scene.add(g);
+  box(12, 9, 14, 0xe8ecf4, 0, 4.5, 0, g);
+  box(12.4, 1, 14.4, 0x7a6cf0, 0, 9.2, 0, g);
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(4.5, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), mat(0x9ad8ff, 0x1a3a66));
+  dome.position.set(0, 9.6, 0); g.add(dome);
+  labRing = new THREE.Mesh(new THREE.TorusGeometry(6, 0.35, 8, 40), mat(0x7a6cf0, 0x3a2a99));
+  labRing.position.set(0, 12, 0); g.add(labRing);
+  box(0.4, 5, 4, 0x2b2f4a, -6.1, 2.5, 0, g);                             // door
+  for (const z of [-4.5, 4.5]) box(0.4, 2.5, 2.5, 0x9ad8ff, -6.1, 6, z, g, { emissive: 0x112244 });
+  colliders.push({ x: LAB.x + 10, z: LAB.z, r: 8.5 });
+}
+stations.push({ id: "lab", x: LAB.x, z: LAB.z, r: 6, ring: zoneRing(LAB.x, LAB.z, 6, 0x7a6cf0) });
+addLabel("station", `UPGRADE LAB<small>Make everything faster</small>`, () => new THREE.Vector3(LAB.x + 10, 17, LAB.z));
+
+// Feeding Pad in front of your Giant
+const FEED = { x: 0, z: -36 };
+const feedPad = cyl(5, 5.4, 0.5, 0xf08c32, FEED.x, 0.25, FEED.z, scene, 32, { emissive: 0x552200 });
+const feedArrow = new THREE.Group(); feedArrow.position.set(FEED.x, 6, FEED.z); scene.add(feedArrow);
+box(0.8, 2.4, 0.8, 0xffb35c, 0, 1.2, 0, feedArrow, { emissive: 0x663300 });
+const arrowHead = new THREE.Mesh(new THREE.ConeGeometry(1.4, 1.8, 4), mat(0xffb35c, 0x663300)); arrowHead.rotation.x = Math.PI; arrowHead.position.y = -0.6; feedArrow.add(arrowHead);
+stations.push({ id: "feed", x: FEED.x, z: FEED.z, r: 5.4, ring: zoneRing(FEED.x, FEED.z, 6.2, 0xf08c32) });
+addLabel("station", `FEEDING PAD<small>Stand here to feed</small>`, () => new THREE.Vector3(FEED.x, 11, FEED.z));
+
+// Orchard: fenced field with trees that drop free food
+const ORCH = { x: 0, z: 70, w: 70, d: 40 };
+const orchardTrees = [];
+{
+  const soil = box(ORCH.w, 0.2, ORCH.d, 0x6b8f3a, ORCH.x, 0.1, ORCH.z, scene, { noShadow: true });
+  for (let i = 0; i <= 14; i++) {
+    const x = ORCH.x - ORCH.w / 2 + i * ORCH.w / 14;
+    if (Math.abs(x - ORCH.x) > 4) box(0.4, 2, 0.4, 0xffffff, x, 1, ORCH.z - ORCH.d / 2);
+    box(0.4, 2, 0.4, 0xffffff, x, 1, ORCH.z + ORCH.d / 2);
+  }
+  box(ORCH.w, 0.3, 0.2, 0xffffff, ORCH.x, 1.6, ORCH.z + ORCH.d / 2);
+  for (let r = 0; r < 2; r++) for (let c = 0; c < 4; c++) {
+    const x = ORCH.x - 24 + c * 16, z = ORCH.z - 8 + r * 16;
+    box(1.4, 6, 1.4, 0x7a5232, x, 3, z);
+    box(7, 5, 7, 0x3e8a3e, x, 8, z); box(5, 3, 5, 0x4c9c46, x, 11.5, z);
+    for (let k = 0; k < 4; k++) box(0.8, 0.8, 0.8, 0xe0413b, x + Math.cos(k * 1.6) * 3.6, 7 + (k % 2), z + Math.sin(k * 1.6) * 3.6, scene, { noShadow: true });
+    orchardTrees.push({ x, z }); colliders.push({ x, z, r: 1.4 });
+  }
+}
+addLabel("station", `ORCHARD<small>Free food grows here</small>`, () => new THREE.Vector3(ORCH.x, 16, ORCH.z - 4));
+
+// Windmill (spins)
+const windmill = new THREE.Group();
+{
+  const x = 52, z = 62;
+  cyl(2.5, 4, 18, 0xe8dcc8, x, 9, z, scene, 8);
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(3.4, 4, 8), mat(0xa0442e)); roof.position.set(x, 20, z); roof.castShadow = true; scene.add(roof);
+  windmill.position.set(x, 17, z + 3.6); scene.add(windmill);
+  for (let i = 0; i < 4; i++) { const b = box(1.6, 11, 0.3, 0xf4efe4, 0, 5.5, 0, null); const arm = new THREE.Group(); arm.add(b); arm.rotation.z = i * Math.PI / 2; windmill.add(arm); }
+  colliders.push({ x, z, r: 4 });
+}
+
+// Jump pads near your Giant
+const jumpPads = [];
+for (const x of [-24, 24]) {
+  const p = cyl(3, 3.2, 0.6, 0x34d4ff, x, 0.3, -40, scene, 24, { emissive: 0x0a4a66 });
+  const chev = new THREE.Group(); chev.position.set(x, 2, -40); scene.add(chev);
+  for (let i = 0; i < 3; i++) { const c = new THREE.Mesh(new THREE.ConeGeometry(1.2, 1, 4), mat(0x9ff0ff, 0x1a6a88)); c.position.y = i * 1.3; chev.add(c); }
+  jumpPads.push({ x, z: -40, r: 3, chev });
+}
+addLabel("station", `JUMP PAD`, () => new THREE.Vector3(-24, 7, -40), 120);
+addLabel("station", `JUMP PAD`, () => new THREE.Vector3(24, 7, -40), 120);
+
+// Lamps and scattered trees for scale
+for (const [x, z] of [[-14, -18], [14, -18], [-20, 20], [20, 20], [-26, -4], [26, -4]]) {
+  cyl(0.3, 0.4, 7, 0x2b2f4a, x, 3.5, z, scene, 8); box(1.2, 1.2, 1.2, 0xfff2b0, x, 7.4, z, scene, { emissive: 0x665a20 });
+  colliders.push({ x, z, r: 0.6 });
+}
+let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+for (let i = 0; i < 55; i++) {
+  const a = rnd() * Math.PI * 2, r = 95 + rnd() * 190, x = Math.cos(a) * r, z = Math.sin(a) * r;
+  if (Math.hypot(x - ORCH.x, z - ORCH.z) < 50) continue;
+  if (RIVALS.some(v => Math.hypot(x - v.x, z - v.z) < 40) || Math.hypot(x - MY_POS.x, z - MY_POS.z) < 40) continue;
+  const s = 0.8 + rnd() * 0.7;
+  box(1.4 * s, 6 * s, 1.4 * s, 0x7a5232, x, 3 * s, z); box(6 * s, 5 * s, 6 * s, 0x3e8a3e, x, 8 * s, z); box(4 * s, 3 * s, 4 * s, 0x4c9c46, x, 11.5 * s, z);
+  colliders.push({ x, z, r: 1.2 * s });
+}
+
+// ---- Player --------------------------------------------------------------------
+const player = { pos: new THREE.Vector3(0, 0, 10), vel: new THREE.Vector3(), yaw: Math.PI, grounded: true, walk: 0 };
+const avatar = new THREE.Group(); scene.add(avatar);
+const av = {};
+av.legL = new THREE.Group(); av.legL.position.set(-0.35, 1.6, 0); avatar.add(av.legL); box(0.6, 1.6, 0.6, 0x2d3a66, 0, -0.8, 0, av.legL);
+av.legR = new THREE.Group(); av.legR.position.set(0.35, 1.6, 0); avatar.add(av.legR); box(0.6, 1.6, 0.6, 0x2d3a66, 0, -0.8, 0, av.legR);
+box(1.4, 1.6, 0.8, 0xffb020, 0, 2.4, 0, avatar);
+av.armL = new THREE.Group(); av.armL.position.set(-0.95, 3.1, 0); avatar.add(av.armL); box(0.45, 1.5, 0.45, 0xf0c8a0, 0, -0.7, 0, av.armL);
+av.armR = new THREE.Group(); av.armR.position.set(0.95, 3.1, 0); avatar.add(av.armR); box(0.45, 1.5, 0.45, 0xf0c8a0, 0, -0.7, 0, av.armR);
+box(1, 1, 1, 0xf0c8a0, 0, 3.75, 0, avatar);
+box(0.18, 0.18, 0.05, 0x111111, -0.22, 3.85, 0.51, avatar); box(0.18, 0.18, 0.05, 0x111111, 0.22, 3.85, 0.51, avatar);
+const backpack = box(1, 1.1, 0.5, 0x8a5a32, 0, 2.5, -0.65, avatar);
+const bagStack = new THREE.Group(); bagStack.position.set(0, 3.1, -0.65); avatar.add(bagStack);
+const shadowBlob = new THREE.Mesh(new THREE.CircleGeometry(0.9, 16), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 }));
+shadowBlob.rotation.x = -Math.PI / 2; scene.add(shadowBlob);
+
+// Bot visitors wandering the map (just for life)
+const walkers = [];
+for (let i = 0; i < 7; i++) {
+  const g = new THREE.Group(); const colors = [0xd84f4f, 0x4fd88a, 0xa24fd8, 0x4fc6d8, 0xd8a24f, 0xe86fb0, 0x8fd84f];
+  const lL = new THREE.Group(); lL.position.set(-0.35, 1.6, 0); g.add(lL); box(0.6, 1.6, 0.6, 0x333344, 0, -0.8, 0, lL);
+  const lR = new THREE.Group(); lR.position.set(0.35, 1.6, 0); g.add(lR); box(0.6, 1.6, 0.6, 0x333344, 0, -0.8, 0, lR);
+  box(1.4, 1.6, 0.8, colors[i], 0, 2.4, 0, g); box(1, 1, 1, 0xe8c09a, 0, 3.75, 0, g);
+  scene.add(g);
+  const w = { g, lL, lR, pos: new THREE.Vector3((rnd() - .5) * 120, 0, (rnd() - .5) * 120), target: new THREE.Vector3(), t: 0 };
+  walkers.push(w);
+}
+const walkerSpots = [[MARKET.x, MARKET.z], [LAB.x, LAB.z], [0, 8], [ORCH.x - 20, ORCH.z], [ORCH.x + 20, ORCH.z], [-24, -40], [24, -40], [-60, -30], [60, -30], [0, 30]];
+function pickTarget(w) { const s = walkerSpots[Math.floor(rnd() * walkerSpots.length)]; w.target.set(s[0] + (rnd() - .5) * 10, 0, s[1] + (rnd() - .5) * 10); }
+walkers.forEach(pickTarget);
+
+// ---- Food meshes, pickups, coins, particles ----------------------------------------
+function foodMesh(id) {
+  const f = FOOD[id]; const g = new THREE.Group();
+  const c = parseInt(f.color.slice(1), 16);
+  switch (id) {
+    case "apple": { const s = new THREE.Mesh(new THREE.SphereGeometry(0.7, 12, 10), mat(c)); g.add(s); box(0.1, 0.4, 0.1, 0x5a3a1a, 0, 0.8, 0, g); box(0.35, 0.1, 0.2, 0x3e9a3e, 0.2, 0.85, 0, g); break; }
+    case "bread": box(1.5, 0.8, 0.9, c, 0, 0, 0, g); box(1.3, 0.2, 0.7, 0xf0d29a, 0, 0.45, 0, g); break;
+    case "burger": cyl(0.8, 0.8, 0.35, 0xd99a50, 0, -0.35, 0, g); cyl(0.85, 0.85, 0.25, 0x6a3a1a, 0, 0, 0, g); cyl(0.9, 0.9, 0.08, 0x5ac04a, 0, 0.15, 0, g); cyl(0.6, 0.8, 0.4, 0xd99a50, 0, 0.38, 0, g); break;
+    case "pizza": { const p = cyl(1.1, 1.1, 0.2, c, 0, 0, 0, g, 3); box(0.3, 0.1, 0.3, 0xc0392b, 0.2, 0.12, 0, g); box(0.3, 0.1, 0.3, 0xc0392b, -0.3, 0.12, 0.25, g); break; }
+    case "cake": cyl(0.9, 0.9, 0.9, c, 0, 0, 0, g); cyl(0.92, 0.92, 0.2, 0xffffff, 0, 0.5, 0, g); box(0.15, 0.4, 0.15, 0xffe066, 0, 0.8, 0, g, { emissive: 0x664400 }); break;
+    case "turkey": { const s = new THREE.Mesh(new THREE.SphereGeometry(0.9, 12, 10), mat(c)); s.scale.set(1.2, 0.8, 1); g.add(s); box(0.25, 0.25, 0.9, 0xf4ead8, 0.6, 0.1, 0.7, g); break; }
+    case "goldsteak": box(1.6, 0.4, 1.1, c, 0, 0, 0, g, { emissive: 0x665000 }); break;
+    case "galaxy": { const t = new THREE.Mesh(new THREE.TorusGeometry(0.7, 0.35, 10, 20), mat(c, 0x2a1066)); t.rotation.x = Math.PI / 2; g.add(t); break; }
+  }
+  g.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  return g;
+}
+
+const pickups = [];   // free food lying on the ground
+const flyers = [];    // food flying into the Giant's mouth
+const coins = [];
+const particles = [];
+const pops = [];
+const coinGeo = new THREE.CylinderGeometry(0.7, 0.7, 0.18, 16);
+const coinMat = mat(0xffd23a, 0x664a00);
+const partGeo = new THREE.BoxGeometry(0.35, 0.35, 0.35);
+
+function spawnPickup(id, x, z, fromY) {
+  const m = foodMesh(id); m.position.set(x, fromY || 1, z); scene.add(m);
+  pickups.push({ id, m, x, z, vy: 0, y: fromY || 1, life: fromY ? 25 : 40, falling: !!fromY });
+}
+function burst(pos, color, n, speed) {
+  if (reduceMotion) n = Math.min(n, 4);
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.Mesh(partGeo, mat(color)); m.position.copy(pos); scene.add(m);
+    const a = Math.random() * Math.PI * 2, s = (speed || 8) * (0.5 + Math.random());
+    particles.push({ m, v: new THREE.Vector3(Math.cos(a) * s, 6 + Math.random() * 10, Math.sin(a) * s), life: 0.9 + Math.random() * 0.4 });
+  }
+}
+function pop(text, color, pos) {
+  const el = document.createElement("div"); el.className = "pop"; el.textContent = text; el.style.color = color;
+  $("labels").appendChild(el); pops.push({ el, pos: pos.clone(), t: 0 });
+}
+
+// ===========================================================================
+// HUD: panels, bag, stomach, leaderboard
+// ===========================================================================
+let openStation = null;
+function openPanel(id) {
+  openStation = id;
+  const panel = $("panel"); panel.hidden = !id;
+  if (!id) return;
+  if (id === "market") { $("panelTitle").textContent = "Food Market"; $("panelSub").textContent = "Food goes in your backpack. Carry it to the Feeding Pad."; }
+  if (id === "lab") { $("panelTitle").textContent = "Upgrade Lab"; $("panelSub").textContent = "Upgrades last forever."; }
+  buildPanel();
+}
+function buildPanel() {
+  const list = $("panelList"); list.innerHTML = "";
+  if (openStation === "market") {
+    for (const f of FOODS) {
+      const row = document.createElement("div"); row.className = "row";
+      row.innerHTML = `<div class="icon" style="background:${f.color}"></div>
+        <div class="info"><div class="name">${f.name}</div><div class="meta">${fmtCash(f.price)} · +${fmtNum(f.mass)} mass · ${f.digest}s</div></div>
+        <div class="btns"><button class="btn buy" data-buy="${f.id}" data-n="1">Buy 1</button><button class="btn buy" data-buy="${f.id}" data-n="max">Fill bag</button></div>`;
+      list.appendChild(row);
+    }
+  } else if (openStation === "lab") {
+    for (const u of UPGRADES) {
+      const row = document.createElement("div"); row.className = "row";
+      row.innerHTML = `<div class="icon" style="background:${u.color}">${u.icon}</div>
+        <div class="info"><div class="name">${u.name} <span class="meta" data-lvl="${u.id}"></span></div><div class="meta" data-txt="${u.id}"></div></div>
+        <div class="btns"><button class="btn lab" data-up="${u.id}"></button></div>`;
+      list.appendChild(row);
+    }
+  }
+  refreshPanel();
+}
+function refreshPanel() {
+  if (openStation === "market") {
+    const room = bagCap() - bagCount();
+    for (const b of $("panelList").querySelectorAll("[data-buy]")) {
+      const f = FOOD[b.dataset.buy];
+      b.classList.toggle("off", S.cash < f.price || room <= 0);
+    }
+  } else if (openStation === "lab") {
+    for (const u of UPGRADES) {
+      const lvl = S.up[u.id], maxed = lvl >= u.max;
+      const b = $("panelList").querySelector(`[data-up="${u.id}"]`); if (!b) continue;
+      b.textContent = maxed ? "MAX" : fmtCash(upCost(u, lvl));
+      b.classList.toggle("off", maxed || S.cash < upCost(u, lvl));
+      $("panelList").querySelector(`[data-lvl="${u.id}"]`).textContent = `Lv ${lvl}`;
+      $("panelList").querySelector(`[data-txt="${u.id}"]`).textContent = maxed ? "Fully upgraded" : u.text(lvl);
+    }
+  }
+}
+$("panelList").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.buy) {
+    const f = FOOD[b.dataset.buy];
+    const room = bagCap() - bagCount();
+    if (room <= 0) { warnOnce("Your backpack is full. Feed your Giant first!"); return; }
+    let n = b.dataset.n === "max" ? Math.min(room, Math.floor(S.cash / f.price)) : 1;
+    if (n < 1 || S.cash < f.price * n) { warnOnce("Not enough cash."); return; }
+    S.cash -= f.price * n; S.bag[f.id] = (S.bag[f.id] || 0) + n;
+    burst(player.pos.clone().setY(3), parseInt(f.color.slice(1), 16), 6, 4);
+    pop(`+${n} ${f.name}`, "#fff", player.pos.clone().setY(5));
+    S.tutorial && S.mass === 0 && toast("Now walk to the orange Feeding Pad in front of your Giant.", "success");
+  }
+  if (b.dataset.up) {
+    const u = UP[b.dataset.up], lvl = S.up[u.id];
+    if (lvl >= u.max) return;
+    const cost = upCost(u, lvl);
+    if (S.cash < cost) { warnOnce("Not enough cash."); return; }
+    S.cash -= cost; S.up[u.id]++;
+    burst(player.pos.clone().setY(3), 0x7a6cf0, 14, 6);
+    banner("UPGRADED!", `${u.name} is now level ${S.up[u.id]}`);
+    renderSlots(true);
+  }
+  refreshPanel(); renderBag(); save();
+});
 
 const slotEls = [];
-for (let i = 0; i < Config.StomachSlots; i++) {
-  const el = document.createElement("div");
-  el.className = "slot empty";
-  el.innerHTML = `<div class="fill"></div><span>Empty</span><small></small>`;
-  $("slots").appendChild(el);
-  slotEls.push({ el, fill: el.querySelector(".fill"), name: el.querySelector("span"), time: el.querySelector("small") });
+function renderSlots(rebuild) {
+  if (rebuild || slotEls.length !== slotCap()) {
+    $("slots").innerHTML = ""; slotEls.length = 0;
+    for (let i = 0; i < slotCap(); i++) {
+      const el = document.createElement("div"); el.className = "slot empty";
+      el.innerHTML = `<div class="fill"></div><span>Empty</span>`;
+      $("slots").appendChild(el); slotEls.push({ el, fill: el.firstChild, name: el.lastChild });
+    }
+  }
+  slotEls.forEach((s, i) => {
+    const it = S.stomach[i], f = it && FOOD[it.id];
+    if (f) {
+      s.el.classList.remove("empty"); s.name.textContent = f.name;
+      s.fill.style.background = f.color; s.fill.style.width = ((1 - it.left / f.digest) * 100).toFixed(0) + "%";
+    } else { s.el.classList.add("empty"); s.name.textContent = "Empty"; s.fill.style.width = "0"; }
+  });
 }
+let bagKey = "";
+function renderBag() {
+  const n = bagCount();
+  $("bagCount").textContent = `Backpack ${n}/${bagCap()}`;
+  const key = JSON.stringify(S.bag);
+  if (key === bagKey) return; bagKey = key;
+  $("bagItems").innerHTML = FOODS.filter(f => S.bag[f.id]).map(f => `<span class="chip"><i style="background:${f.color}"></i>${S.bag[f.id]}</span>`).join("");
+  // Food stacked on the player's back
+  while (bagStack.children.length) bagStack.remove(bagStack.children[0]);
+  let y = 0;
+  for (const f of FOODS) for (let i = 0; i < Math.min(S.bag[f.id] || 0, 4) && y < 12; i++, y++) {
+    box(0.8, 0.35, 0.5, parseInt(f.color.slice(1), 16), (y % 2) * 0.1 - 0.05, y * 0.36, 0, bagStack);
+  }
+}
+function renderBoard() {
+  const rows = RIVALS.map(r => ({ name: r.name + " (bot)", h: rivalHeight(r), me: false, ref: r })).concat([{ name: "You", h: myHeight(), me: true, ref: null }]);
+  rows.sort((a, b) => b.h - a.h);
+  $("board").innerHTML = rows.map((r, i) => `<li class="${r.me ? "me" : ""}"><span class="r">${i + 1}</span><span>${r.name}</span><span>${fmtH(r.h)}</span></li>`).join("");
+  // Crown on the tallest Giant
+  me.crown.visible = rows[0].me;
+  for (const r of RIVALS) r.g.crown.visible = rows[0].ref === r;
+  return rows.findIndex(r => r.me) + 1;
+}
+let lastRank = 99;
 
-$("shopHead").addEventListener("click", () => {
-  const shop = $("shop");
-  const collapsed = shop.classList.toggle("collapsed");
-  $("shopHead").setAttribute("aria-expanded", String(!collapsed));
-  $("chev").textContent = collapsed ? "Show ▴" : "Hide ▾";
-});
-$("devToggle").addEventListener("click", () => {
-  const p = $("devPanel"); p.hidden = !p.hidden;
-  $("devToggle").setAttribute("aria-expanded", String(!p.hidden));
-});
-$("devCash").addEventListener("click", () => { data.cash += 1e6; render(); });
-$("devMass").addEventListener("click", () => { data.mass += 1e9; render(); toast("Height jumps, but the model stops at 12x size.", "success"); });
-$("devMassHuge").addEventListener("click", () => { data.mass += 1e15; render(); toast("The number keeps climbing. The model doesn't.", "success"); });
+// Dev tools
+$("devBtn").addEventListener("click", () => { $("devPanel").hidden = !$("devPanel").hidden; $("devBtn").setAttribute("aria-expanded", String(!$("devPanel").hidden)); });
+$("devCash").addEventListener("click", () => { S.cash += 1e6; refreshPanel(); });
+$("devMass").addEventListener("click", () => { S.mass += 1e9; });
+$("devRain").addEventListener("click", () => startRain());
 let resetArmed = false;
 $("devReset").addEventListener("click", () => {
   if (!resetArmed) { resetArmed = true; $("devReset").textContent = "Tap again to reset"; setTimeout(() => { resetArmed = false; $("devReset").textContent = "Reset progress"; }, 3000); return; }
-  data = freshData(); resetArmed = false; $("devReset").textContent = "Reset progress"; saveData(); render(); toast("Progress reset.");
+  S = fresh(); resetArmed = false; $("devReset").textContent = "Reset progress"; player.pos.set(0, 0, 10); renderSlots(true); bagKey = ""; save(); toast("Progress reset.");
 });
 
-// ---------------------------------------------------------------------------
-// Game actions (mirror the server checks in GameService.luau)
-// ---------------------------------------------------------------------------
-function buyFood(id) {
-  const food = FoodsById[id];
-  if (data.cash < food.price) { toast("Not enough cash.", "error"); return; }
-  data.cash -= food.price;
-  data.inventory[id] = (data.inventory[id] || 0) + 1;
-  render(); saveData();
-}
-function feedFood(id) {
-  const food = FoodsById[id];
-  if (!(data.inventory[id] > 0)) { toast("You don't have any " + food.name + ". Buy one first.", "error"); return; }
-  if (data.stomach.length >= Config.StomachSlots) { toast("Your Giant's stomach is full. Wait for it to digest!", "error"); return; }
-  data.inventory[id] -= 1;
-  if (data.inventory[id] <= 0) delete data.inventory[id];
-  data.stomach.push({ foodId: id, remaining: food.digestSeconds });
-  chomp = 1;
-  render(); saveData();
-}
+// ===========================================================================
+// Input
+// ===========================================================================
+const keys = {};
+addEventListener("keydown", e => {
+  if (e.target.closest && e.target.closest("button") && (e.code === "Space" || e.code === "Enter")) return;
+  keys[e.code] = true;
+  if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
+});
+addEventListener("keyup", e => { keys[e.code] = false; });
+addEventListener("blur", () => { for (const k in keys) keys[k] = false; });
 
-function render() {
-  const h = Growth.height(data.mass);
-  $("cash").textContent = fmtCash(data.cash);
-  $("income").textContent = "+" + fmtNum(Growth.income(h)) + "/s";
-  $("height").textContent = fmtHeight(h);
-  $("labelHeight").textContent = fmtHeight(h);
-  const full = data.stomach.length >= Config.StomachSlots;
-  for (const food of Config.Foods) {
-    const r = rows[food.id];
-    const count = data.inventory[food.id] || 0;
-    r.owned.textContent = `Owned: ${count} · ${fmtTime(food.digestSeconds)}`;
-    r.buy.classList.toggle("off", data.cash < food.price);
-    r.feed.classList.toggle("off", count === 0 || full);
-  }
-  slotEls.forEach((s, i) => {
-    const item = data.stomach[i];
-    const food = item && FoodsById[item.foodId];
-    if (food) {
-      s.el.classList.remove("empty");
-      s.name.textContent = food.name;
-      s.time.textContent = fmtTime(item.remaining);
-      s.fill.style.background = food.color;
-      s.fill.style.width = ((1 - item.remaining / food.digestSeconds) * 100).toFixed(1) + "%";
-    } else {
-      s.el.classList.add("empty");
-      s.name.textContent = "Empty"; s.time.textContent = ""; s.fill.style.width = "0";
-    }
-  });
-}
-
-// ---------------------------------------------------------------------------
-// 3D scene
-// ---------------------------------------------------------------------------
-const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-const canvas = $("scene");
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x8fd0f5);
-scene.fog = new THREE.Fog(0x8fd0f5, 400, 1400);
-const camera = new THREE.PerspectiveCamera(50, 1, 0.5, 4000);
-
-scene.add(new THREE.HemisphereLight(0xcfe6ff, 0x4a6e3c, 0.6));
-const sun = new THREE.DirectionalLight(0xfff4e0, 0.75);
-sun.position.set(120, 260, 80);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, { left: -160, right: 160, top: 200, bottom: -60, near: 10, far: 700 });
-scene.add(sun);
-
-const mat = c => new THREE.MeshLambertMaterial({ color: c });
-function box(w, h, d, color, x, y, z, parent) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color));
-  m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true;
-  parent.add(m); return m;
-}
-
-// Ground and the ring of plots (8 plots on a 230-stud ring, like PlotService)
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(4000, 4000), mat(0x4a8a40));
-ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
-const RING = 230, PLOT = 110;
-const myPlot = new THREE.Group();
-for (let i = 0; i < 8; i++) {
-  const a = i / 8 * Math.PI * 2;
-  const plot = box(PLOT, 1, PLOT, 0xbfa874, Math.cos(a) * RING, 0.5, Math.sin(a) * RING, scene);
-  plot.castShadow = false;
-  plot.lookAt(0, 0.5, 0);
-  if (i === 0) { myPlot.position.set(Math.cos(a) * RING, 1, Math.sin(a) * RING); myPlot.lookAt(0, 1, 0); }
-}
-scene.add(myPlot);
-
-// Trees and rocks for a sense of scale (each tree is ~12 studs tall)
-function tree(x, z, s) {
-  const g = new THREE.Group();
-  box(1.4 * s, 6 * s, 1.4 * s, 0x7a5232, 0, 3 * s, 0, g);
-  box(6 * s, 5 * s, 6 * s, 0x3e8a3e, 0, 8 * s, 0, g);
-  box(4 * s, 3 * s, 4 * s, 0x4c9c46, 0, 11.5 * s, 0, g);
-  g.position.set(x, 0, z); scene.add(g);
-}
-let seed = 7;
-const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-for (let i = 0; i < 70; i++) {
-  const a = rand() * Math.PI * 2, r = 120 + rand() * 520;
-  const x = Math.cos(a) * r, z = Math.sin(a) * r;
-  let onPlot = false;
-  for (let p = 0; p < 8; p++) { const pa = p / 8 * Math.PI * 2; if (Math.hypot(x - Math.cos(pa) * RING, z - Math.sin(pa) * RING) < 80) onPlot = true; }
-  if (!onPlot) tree(x, z, 0.8 + rand() * 0.6);
-}
-
-// The blocky Giant: same parts and proportions as buildGiantModel in PlotService.luau.
-// Its origin is at the feet, so scaling grows it upward from the plot.
-const giant = new THREE.Group();
-const shirt = 0x4f8fd8, pants = 0x2f5682, skin = 0xf0c8a0;
-box(1.4, 4, 1.4, pants, -0.8, 2, 0, giant);
-box(1.4, 4, 1.4, pants, 0.8, 2, 0, giant);
-const torso = box(3.2, 3.5, 1.8, shirt, 0, 5.75, 0, giant);
-const armL = box(1.1, 3.4, 1.1, skin, -2.2, 5.8, 0, giant);
-const armR = box(1.1, 3.4, 1.1, skin, 2.2, 5.8, 0, giant);
-const head = new THREE.Group(); head.position.set(0, 8.6, 0); giant.add(head);
-box(2.2, 2.2, 2.2, skin, 0, 0, 0, head);
-box(0.4, 0.4, 0.1, 0x1a1a1a, -0.5, 0.3, 1.12, head);
-box(0.4, 0.4, 0.1, 0x1a1a1a, 0.5, 0.3, 1.12, head);
-const mouth = box(0.9, 0.22, 0.1, 0x7a2e2e, 0, -0.45, 1.12, head);
-myPlot.add(giant);
-// The plot group faces the map center, so the Giant looks toward the middle of the map.
-
-let shownScale = Growth.visualScale(Growth.height(data.mass));
-
-// Camera orbits the Giant; drag to turn it. Distance follows the Giant's size.
-let yaw = -Math.PI / 2 + 0.35, pitch = 0.32, dragging = false, lastX = 0, lastY = 0, idleSince = 0;
-canvas.addEventListener("pointerdown", e => { dragging = true; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId); });
+let camYaw = 0, camPitch = 0.38, camDist = 20;
+const touch = matchMedia("(pointer: coarse)").matches;
+if (touch) { $("jumpBtn").hidden = false; }
+let joyId = null, joyStart = { x: 0, y: 0 }, joyVec = { x: 0, y: 0 }, lookId = null, lookLast = { x: 0, y: 0 };
+let jumpQueued = false;
+$("jumpBtn").addEventListener("pointerdown", e => { e.preventDefault(); jumpQueued = true; });
+canvas.addEventListener("pointerdown", e => {
+  canvas.setPointerCapture(e.pointerId);
+  if (e.pointerType === "touch" && e.clientX < innerWidth / 2 && joyId === null) {
+    joyId = e.pointerId; joyStart = { x: e.clientX, y: e.clientY }; joyVec = { x: 0, y: 0 };
+    const j = $("joy"); j.hidden = false; j.style.left = e.clientX + "px"; j.style.top = e.clientY + "px"; $("joyKnob").style.transform = "";
+  } else if (lookId === null) { lookId = e.pointerId; lookLast = { x: e.clientX, y: e.clientY }; }
+});
 canvas.addEventListener("pointermove", e => {
-  if (!dragging) return;
-  yaw -= (e.clientX - lastX) * 0.006;
-  pitch = Math.min(1.1, Math.max(0.05, pitch + (e.clientY - lastY) * 0.004));
-  lastX = e.clientX; lastY = e.clientY; idleSince = performance.now();
+  if (e.pointerId === joyId) {
+    let dx = e.clientX - joyStart.x, dy = e.clientY - joyStart.y; const d = Math.hypot(dx, dy), max = 50;
+    if (d > max) { dx *= max / d; dy *= max / d; }
+    joyVec = { x: dx / max, y: dy / max }; $("joyKnob").style.transform = `translate(${dx}px, ${dy}px)`;
+  } else if (e.pointerId === lookId) {
+    camYaw -= (e.clientX - lookLast.x) * 0.006;
+    camPitch = Math.min(1.2, Math.max(0.05, camPitch + (e.clientY - lookLast.y) * 0.004));
+    lookLast = { x: e.clientX, y: e.clientY };
+  }
 });
-canvas.addEventListener("pointerup", () => { dragging = false; idleSince = performance.now(); });
-
-function resize() {
-  const w = window.innerWidth, h = window.innerHeight;
-  renderer.setSize(w, h, false);
-  camera.aspect = w / h; camera.updateProjectionMatrix();
+function endPointer(e) {
+  if (e.pointerId === joyId) { joyId = null; joyVec = { x: 0, y: 0 }; $("joy").hidden = true; }
+  if (e.pointerId === lookId) lookId = null;
 }
-window.addEventListener("resize", resize);
-resize();
+canvas.addEventListener("pointerup", endPointer); canvas.addEventListener("pointercancel", endPointer);
+canvas.addEventListener("wheel", e => { camDist = Math.min(60, Math.max(10, camDist + e.deltaY * 0.02)); }, { passive: true });
 
-const labelEl = $("label");
-const tmp = new THREE.Vector3();
-const giantWorld = new THREE.Vector3();
+// ===========================================================================
+// Game systems
+// ===========================================================================
+let coinTimer = 0, pickupTimer = 0, feedTimer = 0, rainTime = FIRST_RAIN, raining = 0, rainSpawn = 0;
+let lastMilestone = MILESTONES.filter(m => m <= S.best).length;
+let inFlight = 0;
 
-// ---------------------------------------------------------------------------
-// Loop: 1-second game ticks (like the server), smooth 3D every frame
-// ---------------------------------------------------------------------------
-function tick(dt) {
-  const [gained, left] = digest(data.stomach, dt);
-  data.mass += gained;
-  data.stomach = left;
-  data.cash += Growth.income(Growth.height(data.mass)) * dt;
-  render();
+function startRain() {
+  raining = RAIN_LENGTH; rainTime = RAIN_EVERY;
+  banner("FOOD RAIN!", "Food is falling from the sky. Grab it!");
 }
 
-let lastTick = performance.now(), lastFrame = performance.now(), lastSave = Date.now();
+function bestAffordableTier() {
+  let t = 0; for (const f of FOODS) if (f.price <= Math.max(S.cash, 1) * 4) t = f.tier;
+  return t;
+}
+
+function update(dt, now) {
+  S.playTime += dt;
+  const h = myHeight();
+  const inc = Growth.income(h);
+
+  // Digestion + passive income
+  const gained = digest(dt * digestMult());
+  if (gained > 0) S.mass += gained;
+  S.cash += inc * 0.3 * dt;
+
+  // Milestones
+  const hNow = myHeight();
+  if (hNow > S.best) S.best = hNow;
+  const reached = MILESTONES.filter(m => m <= S.best).length;
+  if (reached > lastMilestone) {
+    lastMilestone = reached;
+    const m = MILESTONES[reached - 1];
+    banner(`${m}m TALL!`, "Your Giant is growing. Bonus coins!");
+    me.stomp = 1;
+    for (let i = 0; i < 12; i++) spawnCoin(inc * coinMult() * 2);
+  }
+
+  // Giant drops coins
+  coinTimer -= dt;
+  if (coinTimer <= 0) { coinTimer = 1; if (coins.length < 40) spawnCoin(inc * coinMult()); }
+
+  // Orchard grows free food
+  pickupTimer -= dt;
+  if (pickupTimer <= 0) {
+    pickupTimer = 1.2;
+    if (pickups.filter(p => !p.rain).length < 14) {
+      const t = orchardTrees[Math.floor(Math.random() * orchardTrees.length)];
+      const roll = Math.random();
+      const id = roll < 0.6 ? "apple" : roll < 0.9 ? "bread" : "burger";
+      const a = Math.random() * Math.PI * 2;
+      spawnPickup(id, t.x + Math.cos(a) * 4.5, t.z + Math.sin(a) * 4.5, 8);
+    }
+  }
+
+  // Food Rain event
+  rainTime -= dt;
+  if (rainTime <= 0 && !raining) startRain();
+  if (raining > 0) {
+    raining -= dt; rainSpawn -= dt;
+    $("event").hidden = false; $("event").textContent = `FOOD RAIN · ${Math.ceil(raining)}s`;
+    if (rainSpawn <= 0) {
+      rainSpawn = 0.18;
+      const top = Math.min(FOODS.length - 1, bestAffordableTier() + 1);
+      const tier = Math.max(0, top - Math.floor(Math.random() * 3));
+      const a = Math.random() * Math.PI * 2, r = 6 + Math.random() * 50;
+      const p = { x: Math.cos(a) * r, z: Math.sin(a) * r - 10 };
+      spawnPickup(FOODS[tier].id, p.x, p.z, 50 + Math.random() * 20);
+      pickups[pickups.length - 1].rain = true;
+    }
+    if (raining <= 0) { raining = 0; }
+  } else if (!raining) {
+    $("event").hidden = false; $("event").textContent = `Food Rain in ${Math.ceil(rainTime)}s`;
+  }
+
+  // Player movement
+  let mx = 0, mz = 0;
+  if (keys.KeyW || keys.ArrowUp) mz += 1;
+  if (keys.KeyS || keys.ArrowDown) mz -= 1;
+  if (keys.KeyA || keys.ArrowLeft) mx -= 1;
+  if (keys.KeyD || keys.ArrowRight) mx += 1;
+  if (joyId !== null) { mx += joyVec.x; mz -= joyVec.y; }
+  const mlen = Math.hypot(mx, mz);
+  const speed = runSpeed();
+  const fx = -Math.sin(camYaw), fz = -Math.cos(camYaw), rx = -fz, rz = fx;
+  let wantX = 0, wantZ = 0;
+  if (mlen > 0.05) {
+    const k = Math.min(1, mlen) / mlen;
+    wantX = (fx * mz + rx * mx) * k * speed; wantZ = (fz * mz + rz * mx) * k * speed;
+    player.yaw = Math.atan2(wantX, wantZ);
+  }
+  const accel = player.grounded ? 14 : 4;
+  player.vel.x += (wantX - player.vel.x) * Math.min(1, dt * accel);
+  player.vel.z += (wantZ - player.vel.z) * Math.min(1, dt * accel);
+  if ((keys.Space || jumpQueued) && player.grounded) { player.vel.y = 24; player.grounded = false; }
+  jumpQueued = false;
+  player.vel.y -= 70 * dt;
+  player.pos.addScaledVector(player.vel, dt);
+  if (player.pos.y <= 0) { player.pos.y = 0; player.vel.y = 0; player.grounded = true; }
+
+  // Collisions
+  for (const c of colliders) {
+    const r = (c.fn ? c.fn() : c.r) + 0.8;
+    const dx = player.pos.x - c.x, dz = player.pos.z - c.z, d = Math.hypot(dx, dz);
+    if (d < r && d > 0.001 && player.pos.y < 30) { player.pos.x = c.x + dx / d * r; player.pos.z = c.z + dz / d * r; }
+  }
+  const pd = Math.hypot(player.pos.x, player.pos.z);
+  if (pd > WORLD_R) { player.pos.x *= WORLD_R / pd; player.pos.z *= WORLD_R / pd; }
+
+  // Jump pads
+  for (const jp of jumpPads) {
+    if (player.grounded && Math.hypot(player.pos.x - jp.x, player.pos.z - jp.z) < jp.r) {
+      player.vel.y = 75; player.grounded = false;
+      burst(new THREE.Vector3(jp.x, 1, jp.z), 0x34d4ff, 14, 6);
+    }
+  }
+
+  // Stations
+  let inside = null;
+  for (const st of stations) if (Math.hypot(player.pos.x - st.x, player.pos.z - st.z) < st.r && player.pos.y < 4) inside = st.id;
+  const panelStation = inside === "market" || inside === "lab" ? inside : null;
+  if (panelStation !== openStation) openPanel(panelStation);
+
+  // Feeding Pad: fling food from the backpack into the Giant's mouth
+  feedTimer -= dt;
+  if (inside === "feed" && feedTimer <= 0) {
+    feedTimer = 0.18;
+    if (bagCount() === 0) {
+      if (S.stomach.length + inFlight === 0) warnOnce("Your backpack is empty. Get food from the Market or the Orchard.");
+    } else if (S.stomach.length + inFlight >= slotCap()) {
+      warnOnce("Stomach full! It's digesting. Upgrade it at the Lab.");
+    } else {
+      // Feed the best food first
+      const f = FOODS.slice().reverse().find(x => S.bag[x.id]);
+      S.bag[f.id]--; if (!S.bag[f.id]) delete S.bag[f.id];
+      const m = foodMesh(f.id); m.position.copy(player.pos).setY(4); scene.add(m);
+      flyers.push({ id: f.id, m, from: m.position.clone(), t: 0 });
+      inFlight++;
+    }
+  }
+
+  // Flyers arc to the mouth
+  const mouth = new THREE.Vector3();
+  me.mouth.getWorldPosition(mouth);
+  for (let i = flyers.length - 1; i >= 0; i--) {
+    const fl = flyers[i]; fl.t += dt / 0.6;
+    const t = Math.min(fl.t, 1);
+    fl.m.position.lerpVectors(fl.from, mouth, t);
+    fl.m.position.y += Math.sin(t * Math.PI) * 12;
+    fl.m.rotation.x += dt * 8; fl.m.rotation.z += dt * 6;
+    if (fl.t >= 1) {
+      scene.remove(fl.m); flyers.splice(i, 1); inFlight--;
+      S.stomach.push({ id: fl.id, left: FOOD[fl.id].digest });
+      me.chomp = 1;
+      burst(mouth, parseInt(FOOD[fl.id].color.slice(1), 16), 5, 3 * me.shown);
+      if (S.tutorial) { S.tutorial = false; toast("Nice! Your Giant is digesting. It drops coins as it grows - run over them!", "success"); }
+    }
+  }
+
+  // Pickups: fall, bob, get collected
+  for (let i = pickups.length - 1; i >= 0; i--) {
+    const p = pickups[i]; p.life -= dt;
+    if (p.falling) {
+      p.vy -= 40 * dt; p.y += p.vy * dt;
+      if (p.y <= 0.9) { p.y = 0.9; p.falling = false; burst(new THREE.Vector3(p.x, 0.5, p.z), parseInt(FOOD[p.id].color.slice(1), 16), 4, 3); }
+    }
+    p.m.position.set(p.x, p.falling ? p.y : 0.9 + Math.sin(now / 300 + i) * 0.25, p.z);
+    p.m.rotation.y += dt * 2;
+    const d = Math.hypot(player.pos.x - p.x, player.pos.z - p.z);
+    if (!p.falling && d < 2.4 && player.pos.y < 3) {
+      if (bagCount() < bagCap()) {
+        S.bag[p.id] = (S.bag[p.id] || 0) + 1;
+        pop(`+1 ${FOOD[p.id].name}`, "#fff", p.m.position);
+        burst(p.m.position, parseInt(FOOD[p.id].color.slice(1), 16), 5, 4);
+        scene.remove(p.m); pickups.splice(i, 1); continue;
+      } else warnOnce("Backpack full! Feed your Giant or upgrade your backpack.");
+    }
+    if (p.life <= 0) { scene.remove(p.m); pickups.splice(i, 1); }
+  }
+
+  // Coins: arc out, bounce, get magneted and collected
+  const mr = magnetR();
+  for (let i = coins.length - 1; i >= 0; i--) {
+    const c = coins[i]; c.life -= dt;
+    const d = c.m.position.distanceTo(player.pos.clone().setY(2));
+    if (c.landed && d < mr) {
+      const dir = player.pos.clone().setY(2).sub(c.m.position).normalize();
+      c.m.position.addScaledVector(dir, Math.min(d, dt * (30 + (mr - d) * 6)));
+    } else if (!c.landed) {
+      c.v.y -= 40 * dt; c.m.position.addScaledVector(c.v, dt);
+      if (c.m.position.y <= 0.8) { c.m.position.y = 0.8; if (Math.abs(c.v.y) > 6) { c.v.y *= -0.4; c.v.x *= 0.6; c.v.z *= 0.6; } else c.landed = true; }
+    }
+    c.m.rotation.y += dt * 4;
+    if (d < 2.2) {
+      S.cash += c.value;
+      pop("+" + fmtCash(c.value), "#ffd84a", c.m.position);
+      scene.remove(c.m); coins.splice(i, 1); continue;
+    }
+    if (c.life <= 0) { scene.remove(c.m); coins.splice(i, 1); }
+  }
+
+  // Particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i]; p.life -= dt;
+    p.v.y -= 30 * dt; p.m.position.addScaledVector(p.v, dt);
+    p.m.rotation.x += dt * 5; p.m.scale.setScalar(Math.max(0.01, p.life));
+    if (p.life <= 0 || p.m.position.y < 0) { scene.remove(p.m); particles.splice(i, 1); }
+  }
+}
+
+function spawnCoin(value) {
+  const m = new THREE.Mesh(coinGeo, coinMat); m.rotation.x = Math.PI / 2; m.castShadow = true;
+  const hand = new THREE.Vector3(); me.armR.getWorldPosition(hand);
+  m.position.copy(hand); scene.add(m);
+  // Aim at a spot in front of the Giant (toward the plaza) so coins land where you can reach them.
+  const a = Math.PI / 2 + (Math.random() - 0.5) * 2.4;
+  const reach = 3.2 * me.shown + 5 + Math.random() * 14;
+  const tx = MY_POS.x + Math.cos(a) * reach, tz = MY_POS.z + Math.sin(a) * reach;
+  const T = 1.1;
+  const v = new THREE.Vector3((tx - hand.x) / T, (0.8 - hand.y + 20 * T * T) / T, (tz - hand.z) / T);
+  coins.push({ m, value, v, landed: false, life: 30 });
+}
+
+// ===========================================================================
+// Animation of Giants, avatar, scenery
+// ===========================================================================
+function animateGiant(P, height, dt, t, busy) {
+  const target = Growth.scale(height);
+  P.shown += (target - P.shown) * Math.min(1, dt * 2);
+  P.group.scale.setScalar(P.shown);
+  P.chomp = Math.max(0, P.chomp - dt * 3);
+  P.stomp = Math.max(0, P.stomp - dt * 1.2);
+  const m = reduceMotion ? 0 : 1;
+  P.mouth.scale.y = 1 + P.chomp * 4;
+  P.head.position.y = 8.6 + (busy ? Math.sin(t * 9) * 0.1 : Math.sin(t * 1.6) * 0.05) * m;
+  P.torso.scale.set(3.2 * (busy ? 1.06 : 1), 3.5, 1.8 * (busy ? 1.12 : 1));
+  P.armL.rotation.x = Math.sin(t * 1.4) * 0.12 * m - P.chomp * 0.8;
+  P.armR.rotation.x = -Math.sin(t * 1.4) * 0.12 * m - P.chomp * 0.8;
+  P.armL.rotation.z = -0.08; P.armR.rotation.z = 0.08;
+  const st = Math.sin(P.stomp * Math.PI);
+  P.legR.rotation.x = -st * 0.9 * m;
+  P.group.rotation.z = Math.sin(t * 0.7) * 0.015 * m;
+  if (P.stomp > 0 && P.stomp < 0.08 && !P.stomped) { P.stomped = true; shake = 0.6; burst(P.group.position.clone().setY(1), 0xcdb98a, 20, 10); }
+  if (P.stomp === 0) P.stomped = false;
+}
+let shake = 0;
+
+function animateAvatar(dt, t) {
+  avatar.position.copy(player.pos);
+  const cur = avatar.rotation.y;
+  let d = player.yaw - cur; d = Math.atan2(Math.sin(d), Math.cos(d));
+  avatar.rotation.y = cur + d * Math.min(1, dt * 12);
+  const hs = Math.hypot(player.vel.x, player.vel.z);
+  player.walk += dt * hs * 0.55;
+  const sw = player.grounded ? Math.sin(player.walk) * Math.min(1, hs / 10) * 0.9 : 0.5;
+  av.legL.rotation.x = sw; av.legR.rotation.x = -sw;
+  av.armL.rotation.x = -sw; av.armR.rotation.x = sw;
+  if (!player.grounded) { av.armL.rotation.z = -0.6; av.armR.rotation.z = 0.6; } else { av.armL.rotation.z = 0; av.armR.rotation.z = 0; }
+  shadowBlob.position.set(player.pos.x, 0.2, player.pos.z);
+  shadowBlob.scale.setScalar(Math.max(0.3, 1 - player.pos.y / 40));
+}
+
+// ===========================================================================
+// Minimap
+// ===========================================================================
+const mm = $("minimap").getContext("2d");
+function drawMinimap() {
+  const W = 300, R = 150, sc = R / 230;
+  mm.clearRect(0, 0, W, W);
+  mm.save(); mm.beginPath(); mm.arc(R, R, R, 0, Math.PI * 2); mm.clip();
+  mm.fillStyle = "#3f7f3a"; mm.fillRect(0, 0, W, W);
+  // rotate so camera-forward is up
+  mm.translate(R, R); mm.rotate(camYaw); mm.translate(-player.pos.x * sc, -player.pos.z * sc);
+  const dot = (x, z, r, c) => { mm.fillStyle = c; mm.beginPath(); mm.arc(x * sc, z * sc, r, 0, Math.PI * 2); mm.fill(); };
+  mm.fillStyle = "#cdb98a"; mm.fillRect((ORCH.x - ORCH.w / 2) * sc, (ORCH.z - ORCH.d / 2) * sc, ORCH.w * sc, ORCH.d * sc);
+  dot(0, 0, 18 * sc, "#d9c79a");
+  dot(MARKET.x, MARKET.z, 9, "#3fae5f"); dot(LAB.x, LAB.z, 9, "#7a6cf0"); dot(FEED.x, FEED.z, 9, "#f08c32");
+  for (const jp of jumpPads) dot(jp.x, jp.z, 5, "#34d4ff");
+  for (const r of RIVALS) dot(r.x, r.z, 4 + r.g.shown * 1.4, "#" + r.g.torso.material.color.getHexString());
+  dot(MY_POS.x, MY_POS.z, 5 + me.shown * 1.6, "#4f8fd8");
+  for (const c of coins) dot(c.m.position.x, c.m.position.z, 2.5, "#ffd84a");
+  for (const p of pickups) dot(p.x, p.z, 3, "#ffffff");
+  // Player arrow, pointing the way the character faces
+  mm.translate(player.pos.x * sc, player.pos.z * sc); mm.rotate(Math.PI - player.yaw);
+  mm.fillStyle = "#ffb020"; mm.strokeStyle = "#000"; mm.lineWidth = 2;
+  mm.beginPath(); mm.moveTo(0, -12); mm.lineTo(9, 10); mm.lineTo(0, 5); mm.lineTo(-9, 10); mm.closePath(); mm.fill(); mm.stroke();
+  mm.restore();
+}
+
+// ===========================================================================
+// Main loop
+// ===========================================================================
+function resize() { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
+addEventListener("resize", resize); resize();
+
+const tmpV = new THREE.Vector3();
+let last = performance.now(), hudTimer = 0, saveTimer = 0;
 function frame(now) {
-  const dt = Math.min((now - lastFrame) / 1000, 0.1);
-  lastFrame = now;
-
-  if (now - lastTick >= 1000) { tick((now - lastTick) / 1000); lastTick = now; }
-  if (Date.now() - lastSave > 10000) { saveData(); lastSave = Date.now(); }
-
-  // Ease the model toward its target size so growth is visible but smooth.
-  const target = Growth.visualScale(Growth.height(data.mass));
-  shownScale += (target - shownScale) * Math.min(1, dt * 2.5);
-  giant.scale.setScalar(shownScale);
-
-  // Chomp and digest bob
-  chomp = Math.max(0, chomp - dt * 2);
-  const busy = data.stomach.length > 0;
+  // Simulate in small steps so slow devices still play at real speed.
+  const total = Math.min((now - last) / 1000, 0.25); last = now;
+  const steps = Math.ceil(total / 0.05) || 1, dt = total / steps;
   const t = now / 1000;
-  const bob = reduceMotion ? 0 : (busy ? Math.sin(t * 6) * 0.08 : Math.sin(t * 1.6) * 0.04);
-  torso.scale.set(1 + (busy ? 0.04 : 0), 1, 1 + (busy ? 0.06 : 0));
-  head.position.y = 8.6 + bob;
-  mouth.scale.y = 1 + chomp * 3;
-  armL.rotation.x = reduceMotion ? 0 : Math.sin(t * 1.6) * 0.06;
-  armR.rotation.x = reduceMotion ? 0 : -Math.sin(t * 1.6) * 0.06;
+  for (let i = 0; i < steps; i++) update(dt, now);
 
-  if (!dragging && !reduceMotion && now - idleSince > 4000) yaw += dt * 0.08;
+  const h = myHeight();
+  animateGiant(me, h, dt, t, S.stomach.length > 0);
+  for (const r of RIVALS) animateGiant(r.g, rivalHeight(r), dt, t + r.x, true);
+  animateAvatar(dt, t);
+  for (const w of walkers) {
+    const d = w.target.clone().sub(w.pos); d.y = 0;
+    if (d.length() < 1.5) { w.t -= dt; if (w.t <= 0) { pickTarget(w); w.t = 1 + Math.random() * 3; } }
+    else { d.normalize(); w.pos.addScaledVector(d, dt * 9); w.g.rotation.y = Math.atan2(d.x, d.z); const s = Math.sin(t * 9 + w.pos.x) * 0.8; w.lL.rotation.x = s; w.lR.rotation.x = -s; }
+    w.g.position.copy(w.pos);
+  }
+  if (!reduceMotion) {
+    windmill.rotation.z += dt * 0.8; labRing.rotation.x = Math.PI / 2 + Math.sin(t) * 0.3; labRing.rotation.z += dt * 1.5;
+    feedArrow.position.y = 7 + Math.sin(t * 3) * 0.8; feedArrow.rotation.y += dt * 2;
+    for (const jp of jumpPads) jp.chev.position.y = 1.5 + ((t * 2) % 1.5);
+    for (const c of clouds) { c.position.x += c.userData.speed * dt; if (c.position.x > 400) c.position.x = -400; }
+    for (const st of stations) st.ring.scale.setScalar(1 + Math.sin(t * 4) * 0.04);
+    fountainTop.rotation.y += dt;
+  }
 
-  const giantHeight = 10.8 * shownScale;
-  const dist = 26 + giantHeight * 1.9;
-  giant.getWorldPosition(giantWorld);
-  const focus = tmp.set(giantWorld.x, giantHeight * 0.55, giantWorld.z);
-  const camTarget = new THREE.Vector3(
-    focus.x + Math.sin(yaw) * Math.cos(pitch) * dist,
-    Math.max(3, focus.y + Math.sin(pitch) * dist),
-    focus.z + Math.cos(yaw) * Math.cos(pitch) * dist
-  );
-  camera.position.lerp(camTarget, Math.min(1, dt * 3));
-  camera.lookAt(focus);
+  // Camera follows the player
+  const look = player.pos.clone().setY(player.pos.y + 3.5);
+  const dist = camDist + Math.min(player.pos.y * 0.3, 20);
+  const want = new THREE.Vector3(look.x + Math.sin(camYaw) * Math.cos(camPitch) * dist, look.y + Math.sin(camPitch) * dist, look.z + Math.cos(camYaw) * Math.cos(camPitch) * dist);
+  camera.position.lerp(want, Math.min(1, dt * 8));
+  if (shake > 0) { shake = Math.max(0, shake - dt); camera.position.x += (Math.random() - .5) * shake * 2; camera.position.y += (Math.random() - .5) * shake * 2; }
+  camera.lookAt(look);
+  sun.position.set(player.pos.x + 80, 160, player.pos.z + 60); sun.target.position.copy(player.pos);
 
-  // Height label above the head (like the BillboardGui)
-  const top = new THREE.Vector3(giantWorld.x, giantHeight + 1.5 * shownScale, giantWorld.z).project(camera);
-  if (top.z < 1) {
-    labelEl.hidden = false;
-    // Keep the label clear of the stats bar at the top of the screen.
-    const ly = Math.max((-top.y * 0.5 + 0.5) * window.innerHeight, 130);
-    labelEl.style.transform = `translate(${(top.x * 0.5 + 0.5) * window.innerWidth}px, ${ly}px) translate(-50%, -100%)`;
-  } else labelEl.hidden = true;
+  // Labels
+  for (const l of labels) {
+    const p = l.getPos(); const dd = p.distanceTo(camera.position);
+    tmpV.copy(p).project(camera);
+    if (tmpV.z < 1 && dd < l.maxDist && Math.abs(tmpV.x) < 1.2 && Math.abs(tmpV.y) < 1.2) {
+      l.el.style.display = "";
+      l.el.style.transform = `translate(${(tmpV.x * .5 + .5) * innerWidth}px, ${(-tmpV.y * .5 + .5) * innerHeight}px) translate(-50%, -100%)`;
+    } else l.el.style.display = "none";
+  }
+  for (let i = pops.length - 1; i >= 0; i--) {
+    const p = pops[i]; p.t += dt;
+    tmpV.copy(p.pos).setY(p.pos.y + p.t * 4).project(camera);
+    p.el.style.transform = `translate(${(tmpV.x * .5 + .5) * innerWidth}px, ${(-tmpV.y * .5 + .5) * innerHeight}px) translate(-50%, -100%)`;
+    p.el.style.opacity = String(1 - p.t);
+    if (p.t >= 1) { p.el.remove(); pops.splice(i, 1); }
+  }
+
+  // HUD (a few times a second)
+  hudTimer -= dt;
+  if (hudTimer <= 0) {
+    hudTimer = 0.1;
+    $("cash").textContent = fmtCash(S.cash);
+    $("income").textContent = "+" + fmtNum(Growth.income(h) * (0.3 + coinMult())) + "/s";
+    $("height").textContent = fmtH(h);
+    $("myH").textContent = fmtH(h);
+    for (const r of RIVALS) r.hb.textContent = fmtH(rivalHeight(r));
+    renderBag(); renderSlots(); refreshPanel(); drawMinimap();
+    const rank = renderBoard();
+    if (rank === 1 && lastRank > 1 && lastRank !== 99) { banner("#1 TALLEST!", "Your Giant wears the crown"); burst(MY_POS.clone().setY(12 * me.shown), 0xffd23a, 30, 12); }
+    lastRank = rank;
+  }
+  saveTimer -= dt; if (saveTimer <= 0) { saveTimer = 5; save(); }
 
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
 
-// Catch up on digestion while the tab was closed (capped at 24h, like the server)
-function catchUp(showToast) {
-  const away = Math.min(Math.max((Date.now() - data.lastSeen) / 1000, 0), Config.MaxOfflineSeconds);
-  const [gained, left] = digest(data.stomach, away);
-  data.mass += gained; data.stomach = left; data.lastSeen = Date.now();
-  if (showToast && gained > 0.5) toast(`Welcome back! Your Giant digested ${fmtNum(gained)} mass while you were away.`, "success");
+// Offline catch-up: food keeps digesting while the tab is closed (up to 24h)
+function catchUp(show) {
+  const away = Math.min(Math.max((Date.now() - S.lastSeen) / 1000, 0), 86400);
+  const before = S.mass; S.mass += digest(away * digestMult()); S.lastSeen = Date.now();
+  if (show && S.mass - before > 0.5) toast(`Welcome back! Your Giant digested ${fmtNum(S.mass - before)} mass while you were away.`, "success");
 }
 catchUp(true);
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) saveData();
-  else { catchUp(true); lastTick = performance.now(); render(); }
-});
-window.addEventListener("pagehide", saveData);
+document.addEventListener("visibilitychange", () => { if (document.hidden) save(); else { catchUp(true); last = performance.now(); } });
+addEventListener("pagehide", save);
 
-if (window.innerWidth > 760) { $("shop").classList.remove("collapsed"); $("shopHead").setAttribute("aria-expanded", "true"); $("chev").textContent = "Hide ▾"; }
-render();
-if (data.mass === 0 && data.stomach.length === 0 && !Object.keys(data.inventory).length) toast("Buy an Apple, then feed it to your Giant!");
+renderSlots(true); renderBag();
+if (S.tutorial) setTimeout(() => toast("Walk to the green FOOD MARKET on your left, or grab free food in the Orchard behind you.", "success"), 600);
 requestAnimationFrame(frame);
 })();
 </script>
